@@ -48,6 +48,14 @@ export function loadConfig(): Config {
 }
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
+/** Whether `url` points at this machine (a developer's local API). */
+export const isLocalUrl = (url: string): boolean => {
+  try {
+    return LOCAL.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+};
 /** The API URL, refused unless it is https:// or this machine: the key and the traces never cross a network in clear text. */
 export function apiUrl(url: string): string {
   const u = new URL(url);
@@ -61,11 +69,17 @@ export function apiUrl(url: string): string {
  * secret to the team.
  */
 export async function api(cfg: Config, path: string, body?: object, timeoutMs = 10_000): Promise<any> {
-  const res = await fetch(apiUrl(cfg.url) + path, {
+  const base = apiUrl(cfg.url);
+  const res = await fetch(base + path, {
     method: body ? 'POST' : 'GET',
     headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(redact(body)) : undefined,
     signal: AbortSignal.timeout(timeoutMs),
+  }).catch((e: Error) => {
+    // a timeout stays as it is (lookup and the MCP tools check for TimeoutError); a refused or unknown host reads as one line
+    const cause = e.cause as { code?: string; message?: string; errors?: { code?: string }[] } | undefined;
+    const why = cause?.code ?? cause?.errors?.[0]?.code ?? cause?.message ?? e.message;
+    throw e.name === 'TypeError' ? new Error(`could not reach ${base} (${why})`) : e;
   });
   const json = (await res.json()) as { error?: string };
   // the key was revoked, its person removed or its account deleted: ArcRoom stops on this machine until a new key

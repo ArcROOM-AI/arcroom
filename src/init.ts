@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import { type Agent, AGENTS, CURSOR_HOOKS, opencodePlugin } from './agents.js';
 import { stopDaemon } from './daemon.js';
 import { onPath } from './git.js';
-import { apiUrl, ARCROOM_HOME, DEFAULT_URL } from './home.js';
+import { apiUrl, ARCROOM_HOME, DEFAULT_URL, isLocalUrl, keyRefused } from './home.js';
 
 const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd'];
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse']);
@@ -52,6 +52,22 @@ const writeJson = (file: string, value: unknown) => {
   writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 };
 
+/**
+ * The key and API URL init uses. Re-running init reuses what was saved, except a key the API refused (otherwise a new
+ * key could never get in) and a local URL left from development (it moves to the live API and says so).
+ */
+export function initChoice(o: { argKey?: string; envKey?: string; argUrl?: string; saved: { apiKey?: string; url?: string } }) {
+  const refused = !!o.saved.apiKey && keyRefused({ apiKey: o.saved.apiKey, url: o.saved.url ?? DEFAULT_URL });
+  const key = o.argKey ?? o.envKey ?? (refused ? undefined : o.saved.apiKey);
+  const dropLocal = !o.argUrl && !!o.saved.url && isLocalUrl(o.saved.url);
+  const url = o.argUrl ?? (dropLocal ? DEFAULT_URL : o.saved.url ?? DEFAULT_URL);
+  const notes = [
+    ...(refused && !o.argKey && !o.envKey ? ['The saved key was refused by the API. Paste a new key (web app, Settings → API keys).'] : []),
+    ...(dropLocal ? [`The saved API was ${o.saved.url}; using ${DEFAULT_URL} now (arcroom init --url ${o.saved.url} keeps a local API).`] : []),
+  ];
+  return { key, url, notes };
+}
+
 export async function init(args: string[]): Promise<void> {
   const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
   const agent = (arg('--agent') ?? 'claude') as Agent;
@@ -61,10 +77,12 @@ export async function init(args: string[]): Promise<void> {
   }
   const configFile = join(ARCROOM_HOME, 'config.json');
   const saved = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {}; // re-running init reuses saved values
-  let key = arg('--key') ?? process.env.ARCROOM_API_KEY ?? saved.apiKey;
+  const choice = initChoice({ argKey: arg('--key'), envKey: process.env.ARCROOM_API_KEY, argUrl: arg('--url'), saved });
+  let key = choice.key;
+  const url = choice.url;
   if (arg('--key'))
     console.error('Note: a key typed on the command line stays in your shell history. Next time run arcroom init and paste it when asked, or set ARCROOM_API_KEY.');
-  const url = arg('--url') ?? saved.url ?? DEFAULT_URL;
+  for (const note of choice.notes) console.error(note);
   try {
     apiUrl(url);
   } catch (e) {

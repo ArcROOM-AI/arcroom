@@ -15,6 +15,13 @@ import { sessionUsage, tokensOf } from './usage.js';
 
 const [cmd, ...args] = process.argv.slice(2);
 
+// A command someone typed that fails prints one line, not a stack trace (the hook, daemon and MCP server keep their own handling).
+if (!['hook', 'daemon', 'mcp', 'status'].includes(cmd))
+  process.on('uncaughtException', (e) => {
+    console.error(`arcroom${cmd ? ` ${cmd}` : ''}: ${e.message}`);
+    process.exit(1);
+  });
+
 if (cmd === 'init') await init(args);
 else if (cmd === 'hook') await hook();
 else if (cmd === 'daemon') await daemon();
