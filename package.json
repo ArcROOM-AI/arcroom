@@ -1,0 +1,43 @@
+{
+  "name": "arcroom",
+  "version": "0.1.0",
+  "description": "Shared team memory and run control for coding agents: Claude Code, Codex, Cursor, OpenCode",
+  "license": "Apache-2.0",
+  "author": "ArcRoom AI",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "arcroom": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "homepage": "https://www.arcroomai.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArcROOM-AI/arcroom.git"
+  },
+  "bugs": "https://github.com/ArcROOM-AI/arcroom/issues",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "mcp",
+    "agent-memory"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node test.mjs",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.6.0"
+  }
+}

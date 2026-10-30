@@ -1,0 +1,30 @@
+name: publish
+# A push to main publishes when package.json has a version npm doesn't have yet; otherwise it does nothing.
+on:
+  push:
+    branches: [main]
+    paths: [package.json, .github/workflows/publish.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write # lets npm attach provenance ("built from this commit")
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm # holds NPM_TOKEN; only main may use it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - id: version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if npm view "arcroom@$v" version >/dev/null 2>&1; then echo "new=false" >> "$GITHUB_OUTPUT"; else echo "new=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.version.outputs.new == 'true'
+        run: npm ci
+      - if: steps.version.outputs.new == 'true'
+        run: npm publish --provenance --access public # prepublishOnly builds and tests first
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
