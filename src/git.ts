@@ -30,6 +30,7 @@ export function gitPath(path = process.env.PATH ?? ''): string | null {
 export function git(args: string[], opts: { cwd?: string; timeout?: number; maxBuffer?: number } = {}) {
   const bin = gitPath();
   if (!bin) return { status: null, stdout: undefined as string | undefined };
-  const r = spawnSync(bin, [...SAFE, ...args], { encoding: 'utf8', ...opts });
+  // hooks run with no console of their own: without windowsHide each git call flashes a window on Windows
+  const r = spawnSync(bin, [...SAFE, ...args], { encoding: 'utf8', windowsHide: true, ...opts });
   return { status: r.status, stdout: r.stdout as string | undefined };
 }

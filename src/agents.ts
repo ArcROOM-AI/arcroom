@@ -110,7 +110,7 @@ export function opencodePlugin(entry: string, project?: string, node = process.e
 import { spawnSync } from 'node:child_process';
 
 const run = (payload) => {
-  const r = spawnSync(${JSON.stringify(node)}, ${args}, { input: JSON.stringify(payload), encoding: 'utf8' });
+  const r = spawnSync(${JSON.stringify(node)}, ${args}, { input: JSON.stringify(payload), encoding: 'utf8', windowsHide: true });
   try { return JSON.parse(r.stdout || '{}'); } catch { return {}; }
 };
 

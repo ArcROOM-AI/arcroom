@@ -165,9 +165,10 @@ function addLocalMcp(entry: string): boolean {
     claude.endsWith('.cmd') // an npm install on Windows: a batch file runs through cmd, every argument quoted
       ? spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${[claude, ...args].map((a) => `"${a}"`).join(' ')}"`], {
           windowsVerbatimArguments: true,
+          windowsHide: true,
           encoding: 'utf8',
         })
-      : spawnSync(claude, args, { encoding: 'utf8' });
+      : spawnSync(claude, args, { encoding: 'utf8', windowsHide: true });
   run(['mcp', 'remove', '--scope', 'local', 'arcroom']); // none yet is fine
   return run(['mcp', 'add', '--scope', 'local', 'arcroom', '--', NODE, entry, 'mcp']).status === 0;
 }
