@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.3-beta
+
+- Windows: no more terminal windows flashing open on every agent step. Every program ArcRoom starts (git, the OpenCode bridge, `claude mcp add`) now starts hidden.
+
 ## 0.0.2-beta
 
 - `init` asks for a new key when the saved one was refused, instead of reusing it.

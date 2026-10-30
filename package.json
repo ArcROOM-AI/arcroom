@@ -1,6 +1,6 @@
 {
   "name": "arcroom",
-  "version": "0.0.2-beta",
+  "version": "0.0.3-beta",
   "description": "Shared team memory and run control for coding agents: Claude Code, Codex, Cursor, OpenCode",
   "license": "Apache-2.0",
   "author": "ArcRoom AI",
