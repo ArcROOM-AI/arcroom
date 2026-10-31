@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { redact, redactText } from './redact.js';
+import { redact, redactText, sensitiveFile } from './redact.js';
 
 const MAX = 4000; // ponytail: fixed per-field cap so one huge tool output can't bloat the queue; make configurable if reports need full outputs
 
@@ -30,9 +30,11 @@ const KEEP = ['file_path', 'notebook_path', 'path', 'pattern', 'command', 'url',
 const SHORT = 1000; // prompts and commands; the server reads the first 300 (prompt) and 200 (command) chars
 // redacted before the cut, so a secret the cut splits is still found
 const short = (v: unknown) => (typeof v === 'string' ? redactText(v).slice(0, SHORT) : v);
+// a path to a secret file (.env, keys) or a command that names one leaves only as "[secret file]"
+const kept = (k: string, v: unknown) => (sensitiveFile(v) ? '[secret file]' : k === 'command' ? short(v) : v);
 const metadata = (input: unknown) =>
   Object.fromEntries(
-    KEEP.filter((k) => input && typeof input === 'object' && (input as any)[k] !== undefined).map((k) => [k, k === 'command' ? short((input as any)[k]) : (input as any)[k]]),
+    KEEP.filter((k) => input && typeof input === 'object' && (input as any)[k] !== undefined).map((k) => [k, kept(k, (input as any)[k])]),
   );
 // what Claude Code adds to a prompt (<system-reminder> blocks) is not what the person typed
 const typed = (prompt: unknown) => short(String(prompt ?? '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim());
@@ -53,7 +55,9 @@ export function toArcroomEvent(raw: Record<string, any>, at = new Date()): Arcro
       return { ...base, type: 'prompt', data: { prompt: typed(raw.prompt) } };
     case 'PreToolUse': {
       const ours = String(raw.tool_name).startsWith(OURS);
-      return { ...base, type: 'tool.start', data: { id: raw.tool_use_id, tool: raw.tool_name, input: clip(ours ? raw.tool_input : metadata(raw.tool_input)) } };
+      // a call made inside a subagent says which one, so its steps are not read as the main agent's
+      const subagent = raw.agent_id ? { subagent: String(raw.agent_type ?? raw.agent_id).slice(0, 80) } : {};
+      return { ...base, type: 'tool.start', data: { id: raw.tool_use_id, tool: raw.tool_name, input: clip(ours ? raw.tool_input : metadata(raw.tool_input)), ...subagent } };
     }
     case 'PostToolUse':
       return { ...base, type: 'tool.end', data: { id: raw.tool_use_id, tool: raw.tool_name, ...(String(raw.tool_name).startsWith(OURS) ? { output: clip(raw.tool_response) } : {}) } };

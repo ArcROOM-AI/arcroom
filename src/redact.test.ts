@@ -115,3 +115,13 @@ test('secret files are recognised; .env.example is not', () => {
     assert.ok(sensitiveFile(p), p);
   for (const p of ['.env.example', 'src/env.ts', 'keyboard.ts', 'README.md']) assert.ok(!sensitiveFile(p), p);
 });
+
+test('a secret written in words is redacted; a word that only describes it is not', () => {
+  assert.equal(redactText('my password is hunter2'), 'my password is [REDACTED]');
+  assert.equal(redactText('Password hai Qwerty@12 use karo'), 'Password hai [REDACTED] use karo');
+  assert.equal(redactText('db pwd: abc, then restart'), 'db pwd: [REDACTED], then restart');
+  assert.equal(redactText('the api key is AbC123xyz for staging'), 'the api key is [REDACTED] for staging');
+  assert.equal(redactText('the wifi pin is 4821'), 'the wifi pin is [REDACTED]');
+  for (const text of ['password is required', 'the token is expired, refresh it', 'a secret is not stored here', 'max_tokens 16000', 'pin is ok'])
+    assert.equal(redactText(text), text, text);
+});

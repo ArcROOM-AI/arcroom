@@ -17,7 +17,8 @@ export type Tree = Map<string, Entry>; // repo path ("." for the root) → kind 
 const MAX_NODES = 20_000; // ponytail: past this only folders are sent; send files per folder on demand if big repos need them
 
 const git = (root: string, args: string[]) => {
-  const r = runGit(args, { cwd: root, timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
+  // in the background uploader, never in a hook: a 50k-file repo's git status can take several seconds
+  const r = runGit(args, { cwd: root, timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
   return r.status === 0 ? r.stdout : undefined;
 };
 const parentOf = (p: string) => (p === '.' ? undefined : p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '.');

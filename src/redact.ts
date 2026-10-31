@@ -70,6 +70,14 @@ const URL_PASSWORD = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@"']+:)[^\s@"']+(@)/gi;
 // NAME=value, "name": "value", also inside escaped JSON (\"password\": \"x\")
 const KEY_VALUE =
   /\b((?:[\w-]*(?:password|passwd|pwd|_pass|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|_key|credentials?|accountkey|signature))(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)(?:Bearer\s+)?[^\s"'\\,;&]{6,}/gi;
+// a secret written in words: "my password is hunter2", "pwd: abc", "the api key is …", "password hai Qwerty@12"; a word
+// that only describes it ("password is required", "the token is expired") is left alone
+const PROSE_SKIP = 'the|a|an|not|too|so|in|on|at|for|of|to|ok|fine|set|same|required|wrong|incorrect|correct|missing|empty|invalid|expired|changed|reset|stored|saved|weak|strong|long|short|needed|different|valid';
+const PROSE = new RegExp(
+  `(\\b(?:password|passwd|pwd|passcode|passphrase|secret|token|api[ -]?key|pin)\\s+(?:is|was|hai|he)\\s+|\\b(?:password|passwd|pwd|passcode|passphrase|pin)\\s*[:=]\\s*)` +
+    `(?!\\[REDACTED\\])(?!(?:${PROSE_SKIP})\\b)["'\`]?[^\\s"'\`,;!?]{3,}`,
+  'gi',
+);
 const BEARER = /\b(Bearer\s+)[\w.~+/-]{10,}=*/g;
 const BASIC = /\b(Basic\s+)[A-Za-z0-9+/]{8,}=*/g;
 const COOKIE = /(\b(?:Set-)?Cookie:\s*)[^\n"'\\]+/gi;
@@ -94,6 +102,7 @@ export function redactText(text: string): string {
   return out
     .replace(URL_PASSWORD, `$1${R}$2`)
     .replace(KEY_VALUE, `$1${R}`)
+    .replace(PROSE, `$1${R}`)
     .replace(BEARER, `$1${R}`)
     .replace(BASIC, `$1${R}`)
     .replace(COOKIE, `$1${R}`);

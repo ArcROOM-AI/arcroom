@@ -147,3 +147,16 @@ test('session cache: the same lookup twice is one call; a write empties it', asy
   await cached('/v1/tasks/find', { intent: 'a' });
   assert.equal(seen.length, 3);
 });
+
+test('a client with no ArcRoom hooks in its folder is not told that code is recorded automatically', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const bare = mkdtempSync(join(tmpdir(), 'arcroom-nohooks-'));
+  const none = (await handle('initialize', {}, noCall, { ...ctx, cwd: bare })) as any;
+  assert.match(none.instructions, /^No ArcRoom hooks run for this client/);
+  mkdirSync(join(bare, '.codex'));
+  writeFileSync(join(bare, '.codex', 'hooks.json'), '{"command":"node ~/.arcroom/runtime/index.js hook --agent codex"}');
+  const hooked = (await handle('initialize', {}, noCall, { ...ctx, cwd: bare })) as any;
+  assert.match(hooked.instructions, /^Code changes are recorded automatically/);
+});

@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { blindEvent, type CodeSetup, codeSetup, repoKey, repoPath } from './blind.js';
 import { prefetchCode } from './code.js';
 import { EDIT_TOOLS } from './done.js';
-import { api, ARCROOM_HOME, keyRefused, loadConfig, type Config } from './home.js';
+import { api, ARCROOM_HOME, isOff, keyRefused, loadConfig, offRepos, type Config } from './home.js';
 import { serveLookups } from './lookup.js';
+import { sendLater } from './pending.js';
+import { logSent } from './sent.js';
 import { redact, rememberSecrets } from './redact.js';
 import { branches, syncTree } from './tree.js';
 
@@ -22,7 +24,7 @@ const IDLE_MS = 3000;
 export type State = { offset: number; seq: Record<string, number> }; // ponytail: seq map grows per session forever; prune ended sessions if it gets big
 
 /** Takes complete lines from the queue text: assigns each session's next seq and redacts secrets. */
-export function toBatch(text: string, seq: Record<string, number>, max = BATCH, shape: (e: Record<string, any>) => Record<string, any> = (e) => e) {
+export function toBatch(text: string, seq: Record<string, number>, max = BATCH, shape: (e: Record<string, any>) => Record<string, any> = (e) => e, off = offRepos()) {
   const next = { ...seq };
   const events: Record<string, unknown>[] = [];
   let consumed = 0;
@@ -38,6 +40,7 @@ export function toBatch(text: string, seq: Record<string, number>, max = BATCH, 
       continue;
     }
     if (e?.v !== 1) continue; // raw lines from the first hook version
+    if (isOff(e.cwd, off)) continue; // queued before `arcroom off`: never sent
     const n = next[e.session] ?? 0;
     next[e.session] = n + 1;
     rememberSecrets(e.cwd); // the second pass knows each project's .env values too
@@ -70,8 +73,26 @@ export function rotate(state: State, spool = SPOOL, sending = SENDING): State {
   return state;
 }
 
-/** Sends the next batch from the queue. The offset only moves after the server accepted it. */
-async function drainOnce(cfg: Config): Promise<number> {
+/** Events grouped by the key their folder sends with (a repo can have its own key); each group is sent on its own. */
+export function byKey(events: Record<string, any>[], cfgOf: (cwd?: string) => Config): { cfg: Config; events: Record<string, any>[] }[] {
+  const groups = new Map<string, { cfg: Config; events: Record<string, any>[] }>();
+  for (const e of events) {
+    const cfg = cfgOf(e.cwd);
+    const g = groups.get(cfg.apiKey) ?? { cfg, events: [] };
+    g.events.push(e);
+    groups.set(cfg.apiKey, g);
+  }
+  return [...groups.values()];
+}
+
+/** Sends the next batch from the queue. The offset only moves after the server accepted it (a resent event is ignored). */
+async function drainOnce(def: Config): Promise<number> {
+  const cfgs = new Map<string, Config>();
+  const cfgOf = (cwd?: string) => {
+    if (!cwd) return def;
+    if (!cfgs.has(cwd)) cfgs.set(cwd, loadConfig(cwd));
+    return cfgs.get(cwd)!;
+  };
   const saved = readJson<State>(STATE, { offset: 0, seq: {} });
   const state = rotate(saved);
   if (state !== saved) writeFileSync(STATE, JSON.stringify(state));
@@ -86,16 +107,17 @@ async function drainOnce(cfg: Config): Promise<number> {
   const text = buf.toString('utf8');
   const { events, consumed, seq } = toBatch(text, state.seq, BATCH, withCode);
   if (consumed === 0) return 0;
-  if (events.length) {
-    const result: { stored: number; rejected: number } = await api(cfg, '/v1/ingest', { events }, 30_000);
-    if (result.rejected) log(`server rejected ${result.rejected} of ${events.length} events`);
+  for (const g of byKey(events, cfgOf)) {
+    const result: { stored: number; rejected: number } = await api(g.cfg, '/v1/ingest', { events: g.events }, 30_000);
+    if (result.rejected) log(`server rejected ${result.rejected} of ${g.events.length} events`);
+    logSent(g.events); // what left the laptop, as sent: arcroom sent
   }
   writeFileSync(STATE, JSON.stringify({ offset: state.offset + Buffer.byteLength(text.slice(0, consumed)), seq }));
   // a turn ended or a session started in a repo: send what changed in its tree (after the events, so claims land first)
   for (const cwd of new Set(events.filter((e: any) => e.type === 'turn.end' || e.type === 'run.start').map((e: any) => e.cwd).filter(Boolean)))
-    await syncRepo(cfg, String(cwd)).catch((err) => log(`tree sync: ${err}`));
+    await syncRepo(cfgOf(String(cwd)), String(cwd)).catch((err) => log(`tree sync: ${err}`));
   // a session started: its first prompt's code map, fetched now (not awaited: the queue keeps moving)
-  for (const e of events as any[]) if (e.type === 'run.start' && e.cwd) prefetchCode(cfg, String(e.cwd), String(e.session)).catch((err) => log(`prefetch: ${err}`));
+  for (const e of events as any[]) if (e.type === 'run.start' && e.cwd) prefetchCode(cfgOf(String(e.cwd)), String(e.cwd), String(e.session)).catch((err) => log(`prefetch: ${err}`));
   return events.length;
 }
 
@@ -155,6 +177,9 @@ export async function daemon(): Promise<void> {
       }
       sent = await drainOnce(cfg);
       if (sent) log(`sent ${sent} events`);
+      const later = await sendLater(); // agents' saves kept while the API could not be reached
+      if (later.sent) log(`sent ${later.sent} saves kept while offline`);
+      for (const d of later.dropped) log(`a save kept while offline was refused: ${d}`);
     } catch (err) {
       log(String(err)); // offline or server down: events stay queued, retried next tick
     }
@@ -182,6 +207,19 @@ export function isRunning(pidFile = PID, beatFile = BEAT, now = Date.now()): boo
 export function ensureDaemon(entry: string): void {
   if (isRunning()) return;
   spawn(process.execPath, [entry, 'daemon'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+}
+
+/** Bytes in the queue the daemon has not sent yet (the moved-aside file's rest, then the new queue). */
+export function unsent(state = readJson<State>(STATE, { offset: 0, seq: {} }), spool = SPOOL, sending = SENDING): number {
+  const size = (f: string) => (existsSync(f) ? statSync(f).size : 0);
+  return existsSync(sending) ? Math.max(0, size(sending) - state.offset) + size(spool) : Math.max(0, size(spool) - state.offset);
+}
+
+/** `arcroom flush`: the last step of a CI job. Waits until the daemon has sent everything queued; false after the timeout. */
+export async function flush(entry: string, timeoutMs = 60_000): Promise<boolean> {
+  ensureDaemon(entry);
+  for (const until = Date.now() + timeoutMs; Date.now() < until; await new Promise((r) => setTimeout(r, 500))) if (!unsent()) return true;
+  return false;
 }
 
 /** Called from init: stops a running daemon so the next hook starts the updated one. */

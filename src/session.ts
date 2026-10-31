@@ -1,31 +1,41 @@
-import { git } from './git.js';
+import { projectOf } from './git.js';
+export { projectOf };
 import { api, loadConfig } from './home.js';
 
-/** Project id shared by everyone on the repo: its git remote without protocol/credentials/.git, else the folder path. */
-export function projectOf(cwd: string): string {
-  const remote = git(['config', '--get', 'remote.origin.url'], { cwd }).stdout?.trim();
-  if (!remote) return cwd.replaceAll('\\', '/').toLowerCase();
-  return remote
-    .replace(/^[a-z+]+:\/\/(?:[^@/]+@)?/i, '') // https://user:token@host/... -> host/...
-    .replace(/^[^@]+@([^:]+):/, '$1/') // git@host:owner/repo -> host/owner/repo
-    .replace(/\.git$/, '')
-    .toLowerCase();
-}
 
 const ago = (from: string, now: Date) => {
   const min = Math.max(0, Math.round((now.getTime() - Date.parse(from)) / 60_000));
   return min < 60 ? `${min} min ago` : min < 48 * 60 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`;
 };
 
+/** A path from that run as a path in this repo: under this checkout it loses the root; another laptop's absolute path
+ *  keeps its last three parts, enough to find the file without that laptop's folders. */
+const repoPath = (p: string, root?: string) => {
+  const n = String(p).replaceAll('\\', '/');
+  const r = root?.replaceAll('\\', '/').replace(/\/$/, '');
+  if (r && n.toLowerCase().startsWith(`${r.toLowerCase()}/`)) return n.slice(r.length + 1);
+  return /^([a-z]:)?\//i.test(n) ? n.split('/').slice(-3).join('/') : n;
+};
+
 /** The note a new session starts with: what the last run in this project asked, did, and left open. */
-export function lastRunContext(run: any, now = new Date()): string {
+export function lastRunContext(run: any, now = new Date(), root?: string): string {
   const r = run.report ?? {};
-  const edited: string[] = (r.files ?? []).filter((f: any) => f.edited).map((f: any) => f.path.split(/[\\/]/).pop());
+  // a run that never closed has no report yet: the API sends the files it edited instead
+  const paths: string[] = r.files ? r.files.filter((f: any) => f.edited).map((f: any) => f.path) : Array.isArray(run.edited) ? run.edited : [];
+  const edited = [...new Set(paths.filter(Boolean).map((p) => repoPath(p, root)))];
   const memory = r.memory ?? {};
+  const first = String(r.first_prompt ?? run.prompt ?? '');
+  const last = String(run.last_prompt ?? '');
+  const whose = run.mine === true ? 'your last session' : run.mine === false ? "a teammate's last session" : 'the last session';
+  const ended =
+    run.status === 'running'
+      ? 'never closed (it stopped mid-way): treat its work as unfinished'
+      : `ended ${run.status === 'partial' ? 'PARTIAL: its done-checks were still failing' : run.status}`;
   const lines = [
-    `ArcRoom: the last session in this project (${ago(run.started_at, now)}, on ${run.machine ?? 'another machine'}) ` +
-      `ended ${run.status === 'partial' ? 'PARTIAL: its done-checks were still failing' : run.status}.`,
-    `Asked: "${String(r.first_prompt ?? run.prompt ?? '').slice(0, 200)}"`,
+    `ArcRoom: ${whose} in this project (${ago(run.started_at, now)}, on ${run.machine ?? 'another machine'}${run.branch ? `, branch ${run.branch}` : ''}) ${ended}.`,
+    `Asked: "${first.slice(0, 200)}"`,
+    last && last !== first ? `Last asked: "${last.slice(0, 200)}"` : '',
+    run.failing_check ? `Still failing: \`${String(run.failing_check).slice(0, 200)}\`` : '',
     edited.length ? `Edited: ${edited.slice(0, 10).join(', ')}${edited.length > 10 ? ` (+${edited.length - 10} more)` : ''}` : '',
     `${r.tool_calls ?? 0} tool calls` +
       (r.blocked ? `, ${r.blocked} blocked by the loop guard` : '') +
@@ -36,10 +46,10 @@ export function lastRunContext(run: any, now = new Date()): string {
 }
 
 /** Fetches the last run of this project (skipping the current session); undefined when there is none or the API is slow. */
-export async function lastRunNote(session: string, project: string): Promise<string | undefined> {
-  const cfg = loadConfig();
+export async function lastRunNote(session: string, project: string, branch?: string, root?: string): Promise<string | undefined> {
+  const cfg = loadConfig(root);
   if (!cfg.apiKey) return undefined;
-  const qs = new URLSearchParams({ project, exclude: session });
+  const qs = new URLSearchParams({ project, exclude: session, ...(branch && branch !== 'HEAD' ? { branch } : {}) });
   const run = await api(cfg, `/v1/runs/last?${qs}`, undefined, 1500); // never hold up session start for long
-  return run ? lastRunContext(run) : undefined;
+  return run ? lastRunContext(run, new Date(), root) : undefined;
 }

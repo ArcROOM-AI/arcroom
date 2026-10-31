@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closeEnough, decisionNote, isStale, knowledgeFor, MAX_POINTER, playbookFor, pointerFor, promptIntent } from './recall.js';
+import { closeEnough, decisionNote, isStale, knowledgeFor, matchOf, MAX_POINTER, playbookFor, pointerFor, promptIntent } from './recall.js';
 
 test('the prompt becomes the same task text the database stores', () => {
   assert.equal(promptIntent('  Fix the   failing\ntodo test<system-reminder>ArcRoom is on</system-reminder> '), 'Fix the failing todo test');
@@ -69,9 +69,11 @@ test('a similar task is close enough on wording, or on a shared file with some w
   assert.equal(closeEnough(undefined), false);
 });
 
-test('a similar task is also close enough on meaning: alone when very close, or with some shared wording', () => {
-  assert.equal(closeEnough({ similarity: 0.1, shared_files: 0, meaning: 0.82 }), true);
-  assert.equal(closeEnough({ similarity: 0.17, shared_files: 0, meaning: 0.78 }), true); // "limit how many times someone can try to log in"
+test('a similar task is also close enough on meaning: alone only when nearly the same, else with shared wording or a file', () => {
+  assert.equal(closeEnough({ similarity: 0.1, shared_files: 0, meaning: 0.9 }), true); // the same task reworded or in Hinglish
+  assert.equal(closeEnough({ similarity: 0.1, shared_files: 0, meaning: 0.82 }), false); // same repo, a different task (30 Oct)
+  assert.equal(closeEnough({ similarity: 0.17, shared_files: 0, meaning: 0.78 }), false);
+  assert.equal(closeEnough({ similarity: 0.1, shared_files: 1, meaning: 0.74 }), true); // meaning plus a file the request names
   assert.equal(closeEnough({ similarity: 0.34, shared_files: 0, meaning: 0.66 }), false); // the wrong top match in the recall eval
   assert.equal(closeEnough({ similarity: 0.27, shared_files: 0, meaning: 0.73 }), true); // reworded, some words shared
   assert.equal(closeEnough({ similarity: 0.08, shared_files: 0, meaning: 0.72 }), false); // same repo, different task
@@ -116,4 +118,23 @@ test('a decision says what it was chosen over, who decided, when and where', () 
   assert.equal(decisionNote('anything', undefined), '');
   const k = knowledgeFor([{ memo_id: 'd2', kind: 'decision', text: 'move sessions to postgres', why: 'we run 3 servers', detail }], new Set())!;
   assert.match(k.text, /- decision: move sessions to postgres because we run 3 servers \[over Redis, SQLite;/);
+});
+
+test('the hand-over line says how a similar task matched', () => {
+  assert.equal(matchOf({ similarity: 0.271, meaning: 0.78, shared_files: 1 }), 'words 0.27 · meaning 0.78 · 1 shared file');
+  assert.equal(matchOf({ similarity: 0.55, shared_files: 0 }), 'words 0.55');
+});
+
+test('team facts come newest first, each with its date', () => {
+  const k = knowledgeFor(
+    [
+      { memo_id: 'f1', kind: 'fact', text: 'the cache is Redis', saved_at: '2026-09-01T10:00:00Z' },
+      { memo_id: 'd1', kind: 'decision', text: 'we moved the cache off Redis', saved_at: '2026-10-20T10:00:00Z' },
+    ],
+    new Set(),
+  )!;
+  const lines = k.text.split('\n');
+  assert.equal(lines[1], '- decision (2026-10-20): we moved the cache off Redis');
+  assert.equal(lines[2], '- fact (2026-09-01): the cache is Redis');
+  assert.deepEqual(k.items.map((i) => i.id), ['d1', 'f1']);
 });

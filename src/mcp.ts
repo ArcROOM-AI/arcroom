@@ -7,9 +7,11 @@ import { hostname } from 'node:os';
 import { relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { api, isOff, keyRefused, loadConfig } from './home.js';
+import { hooksHere, setUpHere } from './scope.js';
+import { keepForLater, unreachable, WRITES } from './pending.js';
 import { codeNoteBody } from './code.js';
 import { defuse, MEMORY_NOTE } from './fence.js';
-import { localFile } from './fresh.js';
+import { localFile, lf } from './fresh.js';
 import { ICONS } from './logo.js';
 import { withRoute } from './route.js';
 
@@ -246,7 +248,7 @@ const PATHS: Record<string, string> = {
 type Call = (path: string, body: object) => Promise<any>;
 export type Context = { claimant: string; branch: string | null; cwd: string };
 
-const sha256 = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+const sha256 = (file: string) => createHash('sha256').update(lf(readFileSync(file))).digest('hex');
 
 /** {"file:<path>": sha256} for files the answer depends on; a missing file is recorded as "missing". */
 export function fileDeps(paths: string[], cwd: string): Record<string, string> {
@@ -278,7 +280,11 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         protocolVersion: params?.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {} },
         serverInfo: { name: 'arcroom', title: 'ArcRoom', version: '0.0.0', websiteUrl: 'https://arcroomai.com', icons: ICONS },
-        instructions: 'Code changes are recorded automatically from the session; do not call these tools for them. Check find_task before a question, lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task when you do one yourself. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note. Run a part that has route.model with the Agent tool on that model.',
+        instructions: isOff(ctx.cwd)
+          ? 'ArcRoom is switched off for this repo (arcroom off): its tools do nothing here.'
+          : !hooksHere(ctx.cwd)
+          ? 'No ArcRoom hooks run for this client, so nothing is recorded on its own. Check find_task before a task, a question, a lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task with what you did, including code changes, when you finish one. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note.'
+          : 'Code changes are recorded automatically from the session; do not call these tools for them. Check find_task before a question, lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task when you do one yourself. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note. Run a part that has route.model with the Agent tool on that model.',
       };
     case 'ping':
       return {};
@@ -287,16 +293,20 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
     case 'tools/call': {
       const path = PATHS[params?.name];
       if (!path) throw { code: -32602, message: `unknown tool ${params?.name}` };
-      if (keyRefused())
+      if (keyRefused(loadConfig(ctx.cwd)))
         return { content: [{ type: 'text', text: 'ArcRoom is stopped on this machine: its key was revoked or its account deleted. Run arcroom init with a new key.' }], isError: true };
       if (isOff(ctx.cwd)) return { content: [{ type: 'text', text: 'ArcRoom is switched off for this repo (arcroom on to use it again).' }], isError: true };
+      if (process.argv.includes('--user') && !setUpHere(ctx.cwd))
+        return { content: [{ type: 'text', text: 'ArcRoom is not set up for this repo: run arcroom init in it once.' }], isError: true };
       // depends_on is only ever built here from real file hashes (fileDeps), never taken from the agent
       const { for: pinFor, depends_on_files, depends_on: _given, ...args } = params.arguments ?? {};
       if (params.name === 'code_note') {
+        const note = codeNoteBody(args, ctx.cwd);
         try {
-          const r = await call(path, codeNoteBody(args, ctx.cwd));
+          const r = await call(path, note);
           return { content: [{ type: 'text', text: JSON.stringify(r) }] };
         } catch (err) {
+          if (unreachable(err)) return keptLater(path, note, ctx.cwd);
           return { content: [{ type: 'text', text: `ArcRoom error: ${(err as Error).message}` }], isError: true };
         }
       }
@@ -322,6 +332,7 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         // a lookup past its deadline is "nothing found": an error would send the agent off debugging ArcRoom
         if (params.name === 'find_task' && (err as Error).name === 'TimeoutError')
           return { content: [{ type: 'text', text: JSON.stringify({ match: 'none', note: 'ArcRoom did not answer in time; carry on without it' }) }] };
+        if (WRITES.has(path) && unreachable(err)) return keptLater(path, body, ctx.cwd);
         return { content: [{ type: 'text', text: `ArcRoom error: ${(err as Error).message}` }], isError: true };
       }
     }
@@ -352,8 +363,14 @@ export function sessionCache(call: Call, ms = 5 * 60_000): Call {
   };
 }
 
+/** A save the API could not be reached for: kept on this laptop and sent when it answers again (pending.ts). */
+function keptLater(path: string, body: object, cwd: string) {
+  keepForLater(path, body, cwd);
+  return { content: [{ type: 'text', text: JSON.stringify({ kept: true, note: 'ArcRoom is offline: saved on this laptop, sent when it is back. Carry on.' }) }] };
+}
+
 export async function mcp(): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = loadConfig(process.cwd()); // one MCP process per session, started in its project
   const call: Call = sessionCache((path, body) => api(cfg, path, body, path === PATHS.find_task ? FIND_DEADLINE_MS : 10_000));
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout?.trim() || null;
   const ctx = { claimant: `${hostname()}:${process.pid}`, branch, cwd: process.cwd() }; // one MCP process per Claude session

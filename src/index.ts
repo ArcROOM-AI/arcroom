@@ -2,13 +2,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeSetup, forgetBlind, gitRoot, repoKey, writeSetup } from './blind.js';
-import { daemon } from './daemon.js';
+import { daemon, flush, unsent } from './daemon.js';
 import { doctor, print } from './doctor.js';
 import { approveChecks, checksHash, isApproved, loadChecks, readApprovals } from './done.js';
 import { syncTree } from './tree.js';
 import { api, ARCROOM_HOME, loadConfig, setOff } from './home.js';
 import { hook } from './hook.js';
-import { init } from './init.js';
+import { init, uninstall } from './init.js';
+import { sentReport } from './sent.js';
 import { mcp } from './mcp.js';
 import { readStats, statusText } from './signs.js';
 import { sessionUsage, tokensOf } from './usage.js';
@@ -29,7 +30,7 @@ else if (cmd === 'mcp') await mcp();
 else if (cmd === 'doctor') {
   if (!print(await doctor())) process.exitCode = 1;
 } else if (cmd === 'whoami') {
-  const me = await api(loadConfig(), '/v1/me');
+  const me = await api(loadConfig(process.cwd()), '/v1/me');
   console.log(`${me.email ?? 'shared key (no person)'} in workspace "${me.workspace}" (key ${me.key_label ?? 'unlabelled'}, made ${me.key_created_at})`);
 } else if (cmd === 'status') {
   // Claude Code status line: gets the session JSON on stdin, prints one line. Must be fast and never fail.
@@ -47,20 +48,24 @@ else if (cmd === 'doctor') {
   // arcroom rule [--tag <tag>] [--max-hits N] [--idle-days D]   (no limits = remove the rule)
   const opt = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
   const num = (name: string) => (opt(name) === undefined ? null : Number(opt(name)));
-  const res = await api(loadConfig(), '/v1/rules', { tag: opt('--tag') ?? null, max_hits: num('--max-hits'), idle_days: num('--idle-days') });
+  const res = await api(loadConfig(process.cwd()), '/v1/rules', { tag: opt('--tag') ?? null, max_hits: num('--max-hits'), idle_days: num('--idle-days') });
   console.log(res.rule ? `rule set: ${JSON.stringify(res.rule)}` : 'rule removed');
 } else if (cmd === 'wrong' || cmd === 'share') {
   // arcroom wrong [memo id] [reason]: the memory just handed over (or the one named) was wrong
-  // arcroom share [memo id]: share your new steps with the team before their second pass
+  // arcroom share <memo id>: share an answer saved as "only me" with the team (recorded steps are the team's already)
   const lastFile = join(ARCROOM_HOME, 'last-recall.json');
   const named = /^[0-9a-f-]{36}$/i.test(args[0] ?? '') ? args.shift() : undefined;
-  const last = named ? { memo_id: named, intent: named } : existsSync(lastFile) ? JSON.parse(readFileSync(lastFile, 'utf8')) : undefined;
-  if (!last) console.log('no memory was handed over yet; pass its id (see the Memory page)');
+  const last = named ? { memo_id: named, intent: named } : cmd === 'wrong' && existsSync(lastFile) ? JSON.parse(readFileSync(lastFile, 'utf8')) : undefined;
+  if (!last && cmd === 'share') console.log('steps your agents record are shared with the team already; to share an answer saved as private, pass its id: arcroom share <memo id> (see the Memory page)');
+  else if (!last) console.log('no memory was handed over yet; pass its id (see the Memory page)');
+  else if (!named && Array.isArray(last.handed) && last.handed.length > 1)
+    // several memories came in that hand-over: say which, instead of guessing
+    console.log(`The last hand-over had ${last.handed.length} memories. Name the wrong one:\n${last.handed.map((h: any) => `  arcroom wrong ${h.memo_id}   ${h.kind}: ${h.text}`).join('\n')}`);
   else if (cmd === 'share') {
-    await api(loadConfig(), '/v1/memory/share', { memo_id: last.memo_id });
+    await api(loadConfig(process.cwd()), '/v1/memory/share', { memo_id: last.memo_id });
     console.log(`shared with the team: ${last.intent}`);
   } else {
-    const r = await api(loadConfig(), '/v1/memory/wrong', { memo_id: last.memo_id, reason: args.join(' ') || null });
+    const r = await api(loadConfig(process.cwd()), '/v1/memory/wrong', { memo_id: last.memo_id, reason: args.join(' ') || null });
     const what = r.deleted
       ? 'deleted (2 people said wrong)'
       : r.steps_broken
@@ -81,10 +86,10 @@ else if (cmd === 'doctor') {
     console.log(`Code wing ${sub} for ${s.root} (commit .arcroom.json so the team gets the same setting)`);
   } else if (s.mode !== 'standard') console.log(`Code wing is ${s.mode} for this repo${s.mode === 'off' ? ': arcroom code on turns it on' : ''}`);
   else if (sub === 'sync') {
-    const r = await syncTree(loadConfig(), s);
+    const r = await syncTree(loadConfig(process.cwd()), s);
     console.log(`sent ${r.nodes} folders and files (repo ${repoKey(s)})`);
   } else {
-    const repos: any[] = await api(loadConfig(), '/v1/code/tree');
+    const repos: any[] = await api(loadConfig(process.cwd()), '/v1/code/tree');
     const me = repos.find((x) => x.repo === repoKey(s));
     console.log(
       me
@@ -92,6 +97,19 @@ else if (cmd === 'doctor') {
         : 'this repo has not sent its tree yet: arcroom code sync',
     );
   }
+} else if (cmd === 'flush') {
+  // arcroom flush: the last step of a CI job, so a headless run's final events are not lost when the machine goes away
+  const ok = await flush(process.argv[1]);
+  console.log(ok ? 'everything queued was sent' : `${unsent()} bytes still queued after 60 s: see arcroom doctor`);
+  if (!ok) process.exitCode = 1;
+} else if (cmd === 'sent') {
+  // arcroom sent [YYYY-MM-DD] [--all]: what this laptop sent that day, kept 7 days
+  console.log(sentReport(args));
+} else if (cmd === 'uninstall') {
+  // arcroom uninstall [--all]: ArcRoom out of this project for every agent; --all also deletes ~/.arcroom
+  const changed = uninstall(process.cwd(), args.includes('--all'));
+  console.log(changed.length ? `Removed ArcRoom from:\n${changed.map((c) => `  ${c}`).join('\n')}` : 'Nothing of ArcRoom was set up in this project.');
+  if (!args.includes('--all')) console.log('Other projects on this laptop keep it. arcroom uninstall --all also deletes ~/.arcroom (key, queue, runtime).');
 } else if (cmd === 'off' || cmd === 'on') {
   // arcroom off | on: ArcRoom for the repo you are in, on this laptop only (nothing traced or sent while off)
   const root = gitRoot(process.cwd()) ?? process.cwd();
@@ -106,7 +124,7 @@ else if (cmd === 'doctor') {
   if (!checks.length) console.log('no doneChecks in .arcroom.json here');
   else if (args[0] === 'approve' && !process.stdin.isTTY)
     // an agent's shell has no terminal: approving stays a step the person takes themselves (N14)
-    console.log('not approved: run arcroom checks approve yourself, in a terminal (not through an agent)');
+    console.log(`not approved: run arcroom checks approve yourself, in a terminal (not through an agent); in CI, set ARCROOM_APPROVE_CHECKS=${code} in the job's environment`);
   else if (args[0] === 'approve') {
     const done = approveChecks(process.cwd(), args[1] ?? '');
     console.log(done ? `approved for ${process.cwd()} (after editing files, the agent is asked to run them with its Bash tool before it stops):\n${list}` : 'not approved: run arcroom checks, read the commands, then arcroom checks approve <the code it prints>');
@@ -122,7 +140,7 @@ To allow them: arcroom checks approve ${code}`);
   else {
     const over = opt('--over')?.split(',').map((o) => o.trim()).filter(Boolean);
     const url = opt('--source');
-    const r = await api(loadConfig(), '/v1/memory/remember', {
+    const r = await api(loadConfig(process.cwd()), '/v1/memory/remember', {
       kind: 'decision',
       text,
       why: opt('--why') ?? null,
@@ -134,4 +152,4 @@ To allow them: arcroom checks approve ${code}`);
     });
     console.log(`${r.saved ? 'decision saved' : 'decision already saved; detail updated'}${r.replaced ? ', the earlier one is replaced' : ''} (${r.memo_id})`);
   }
-} else console.log('usage: arcroom init [--project <id>] (asks for the key; or set ARCROOM_API_KEY) [--url <arcroom api url>] | arcroom whoami | arcroom doctor | arcroom rule [--tag t] [--max-hits n] [--idle-days d] | arcroom wrong [memo id] [reason] | arcroom share [memo id] | arcroom decide "<choice>" [--why ...] [--over "A, B"] | arcroom code [status|sync|on|off] | arcroom checks [approve] | arcroom off | arcroom on');
+} else console.log('usage: arcroom init [--project <id>] (asks for the key; or set ARCROOM_API_KEY) [--url <arcroom api url>] | arcroom whoami | arcroom doctor | arcroom rule [--tag t] [--max-hits n] [--idle-days d] | arcroom wrong [memo id] [reason] | arcroom share [memo id] | arcroom decide "<choice>" [--why ...] [--over "A, B"] | arcroom code [status|sync|on|off] | arcroom checks [approve] | arcroom off | arcroom on | arcroom uninstall [--all] | arcroom init --everywhere | arcroom sent [YYYY-MM-DD] [--all] | arcroom flush');

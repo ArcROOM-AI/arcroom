@@ -3,16 +3,17 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path';
 import { type Agent, AGENTS, fromAgent, toAgent } from './agents.js';
 import { ensureDaemon } from './daemon.js';
-import { noteEdit, onStop } from './done.js';
+import { EDIT_TOOLS, noteEdit, onStop, SHELL_TOOLS } from './done.js';
 import { toArcroomEvent } from './events.js';
-import { noteDir } from './code.js';
+import { editClash, noteDir } from './code.js';
 import { fence } from './fence.js';
 import { redact, rememberSecrets } from './redact.js';
-import { ARCROOM_HOME, isOff, keyRefused } from './home.js';
+import { ARCROOM_HOME, isOff, keyRefused, loadConfig } from './home.js';
 import { type Lookup, lookupFast } from './lookup.js';
 import { checkLoop, sessionFile } from './loop.js';
 import { type Kind, pack, type Piece } from './pack.js';
 import { lastRunNote, projectOf } from './session.js';
+import { laptopHookActs } from './scope.js';
 import { bump, MARK, signFor, toolResult } from './signs.js';
 import { costSinceClaim, markClaim, turnUsage } from './usage.js';
 
@@ -45,7 +46,13 @@ export async function hook(): Promise<void> {
     const agent: Agent = flag > 0 && (AGENTS as readonly string[]).includes(process.argv[flag + 1]) ? (process.argv[flag + 1] as Agent) : 'claude';
     const raw = fromAgent(JSON.parse(input), agent);
     if (isOff(raw.cwd)) return; // switched off for this repo by this person (arcroom off): nothing recorded or sent
-    if (keyRefused()) return; // the key was revoked or its account deleted: nothing runs until a new key (arcroom init)
+    if (process.argv.includes('--user') && !laptopHookActs(raw.cwd)) return; // laptop-wide hook: only set-up repos, never twice
+    if (keyRefused(loadConfig(raw.cwd))) {
+      // the key was revoked or its account deleted: nothing runs until a new key (arcroom init); said once, at session start
+      if (raw.hook_event_name === 'SessionStart')
+        process.stdout.write(JSON.stringify(toAgent(agent, 'SessionStart', { systemMessage: `${MARK} · stopped: the API refused this laptop's key. Run arcroom init with a new key (web app, Settings → API keys).` }, String(raw.session_id))));
+      return;
+    }
     rememberSecrets(raw.cwd); // this project's .env values are redacted wherever they show up
     const name: string = raw.hook_event_name;
     const session = String(raw.session_id);
@@ -62,7 +69,7 @@ export async function hook(): Promise<void> {
 
     // Token meter: the turn's usage goes in before its turn.end, so the report built at turn.end includes it.
     // After each tool call too, so the website shows a long turn's tokens while it runs.
-    if (name === 'Stop' || name === 'SessionEnd' || name === 'PostToolUse') {
+    if (name === 'Stop' || name === 'SessionEnd' || name === 'PreToolUse') {
       const usage = turnUsage(session, raw.transcript_path);
       if (usage) emit('usage', usage);
     }
@@ -148,17 +155,23 @@ export async function hook(): Promise<void> {
         say(`${MARK} · a playbook from ${playbook.runs} similar runs`);
       }
       if (pointer) given.add(pointer.memoId);
-      // what `arcroom wrong` reports when the person says the memory just handed over was wrong
-      const last = pointer ?? (playbook && { memoId: playbook.memoId, intent: 'playbook' });
-      if (last) writeFileSync(join(ARCROOM_HOME, 'last-recall.json'), JSON.stringify({ memo_id: last.memoId, intent: last.intent }));
+      // what `arcroom wrong` reports when the person says the memory just handed over was wrong: every memory handed over
+      // (steps or answer, playbook, each fact and decision), so it can name the one that was wrong
+      const handed = [
+        ...(pointer ? [{ memo_id: pointer.memoId, kind: pointer.kind, text: pointer.intent }] : []),
+        ...(playbook ? [{ memo_id: playbook.memoId, kind: 'playbook', text: 'playbook' }] : []),
+        ...(knowledge ? knowledge.items.map((i) => ({ memo_id: i.id, kind: i.kind, text: i.text })) : []),
+      ];
+      if (handed.length) writeFileSync(join(ARCROOM_HOME, 'last-recall.json'), JSON.stringify({ memo_id: handed[0].memo_id, intent: handed[0].text, handed }));
       if (pointer || knowledge || playbook) writeFileSync(givenFile, JSON.stringify([...given]));
       if (pointer) {
         injected('recall', pointer.text, true);
         // the turn's outcome credits (or heals) these steps when the turn ends
-        if (pointer.kind === 'steps') emit('memory.replayed', { memo_id: pointer.memoId });
-        else emit('memory.reused', { memo_id: pointer.memoId, version: pointer.version });
+        const match = pointer.match ? { similar: true, match: pointer.match } : {};
+        if (pointer.kind === 'steps') emit('memory.replayed', { memo_id: pointer.memoId, ...match });
+        else emit('memory.reused', { memo_id: pointer.memoId, version: pointer.version, ...match });
         bump(session, pointer.kind === 'steps' ? 'replayed' : 'reused');
-        say(`${MARK} · ${pointer.kind === 'steps' ? 'steps from a past run' : 'a team answer'}${pointer.similar ? ' for a similar task' : ''}: ${pointer.intent.slice(0, 70)}`);
+        say(`${MARK} · ${pointer.kind === 'steps' ? 'steps from a past run' : 'a team answer'}${pointer.similar ? ' for a similar task' : ''}: ${pointer.intent.slice(0, 70)}${pointer.match ? ` (match: ${pointer.match})` : ''}`);
       }
       // a hit is the lookup already done: the reminder would only send the agent to find_task for it again
       // what teammates' agents wrote goes in one fenced block of data (fence.ts); ArcRoom's own reminder stays outside it
@@ -178,11 +191,21 @@ export async function hook(): Promise<void> {
         injected('deny', reason);
         say(`${MARK} · blocked a repeated ${String(raw.tool_name).replace(OUR_TOOLS, '')} call (same input 3 times in a row)`);
         bump(session, 'blocked');
-      } else noteEdit(raw);
+      } else {
+        // two agents on one file: the first edit waits once, with who is on it (the same edit again goes through)
+        const clash = EDIT_TOOLS.has(raw.tool_name)
+          ? await editClash(loadConfig(raw.cwd), session, raw.cwd, raw.tool_input?.file_path ?? raw.tool_input?.notebook_path).catch(() => undefined)
+          : undefined;
+        if (clash) {
+          out.hookSpecificOutput = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: clash };
+          injected('deny', clash);
+          say(`${MARK} · another agent is editing this file: asked yours to check first`);
+        } else noteEdit(raw);
+      }
     }
 
     // a done-check the agent ran with Bash (the Stop hook asks for them; it never runs them itself)
-    if (name === 'PostToolUse' && raw.tool_name === 'Bash') noteEdit(raw);
+    if (name === 'PostToolUse' && SHELL_TOOLS.has(raw.tool_name)) noteEdit(raw);
 
     if (name === 'PostToolUse' && String(raw.tool_name).startsWith(OUR_TOOLS)) {
       const tool = raw.tool_name.slice(OUR_TOOLS.length);
@@ -213,14 +236,16 @@ export async function hook(): Promise<void> {
 
     if (project) {
       // Session memory: start with what the last run in this project did. Slow or offline API = no note.
-      const note = await lastRunNote(session, project).catch(() => undefined);
+      const root = git(['rev-parse', '--show-toplevel'], { cwd: raw.cwd }).stdout?.trim();
+      const note = await lastRunNote(session, project, branch, root).catch(() => undefined);
       if (note) {
         // the last run here may be a teammate's: its ask is their words, so it is fenced like any memory
         out.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: fence(note) };
         injected('last_run', note, true);
       }
       // say what leaves the laptop, every session (events.ts keeps it to that)
-      say(`${MARK} · on: team memory · sends prompts, file paths and commands (no file contents)${note ? ' · picked up where the last run here left off' : ''}`);
+      const ws = loadConfig(raw.cwd).workspace;
+      say(`${MARK} · on: team memory${ws ? ` in "${ws}"` : ''} · sends prompts, file paths and commands (no file contents)${note ? ' · picked up where the last run here left off' : ''}`);
     }
 
     const reply = toAgent(agent, name, out, session);

@@ -3,30 +3,17 @@ import { join } from 'node:path';
 import { isRunning } from './daemon.js';
 import { isApproved, loadChecks, readApprovals } from './done.js';
 import { api, apiUrl, ARCROOM_HOME, isOff, keyRefused, loadConfig } from './home.js';
+import { AGENT_FILES, laptopWide, ours } from './scope.js';
 
 // arcroom doctor: is ArcRoom working on this laptop and in this folder? Each check says what is wrong and the command
 // that fixes it. A failure exits non-zero; a warning does not.
 
 export type Check = { ok: boolean | 'warn'; what: string; fix?: string };
 
-// where `arcroom init` wires each agent in a project
-const AGENT_FILES: [string, string][] = [
-  ['Claude Code', join('.claude', 'settings.local.json')],
-  ['Codex', join('.codex', 'hooks.json')],
-  ['Cursor', join('.cursor', 'hooks.json')],
-  ['OpenCode', join('.opencode', 'plugins', 'arcroom.js')],
-];
-// the runtime under ~/.arcroom, or under ARCROOM_HOME when that is set
-const runtimePath = join(ARCROOM_HOME, 'runtime').replaceAll('\\', '/');
-const ours = (file: string) => {
-  if (!existsSync(file)) return false;
-  const text = readFileSync(file, 'utf8').replaceAll('\\\\', '/').replaceAll('\\', '/');
-  return text.includes('.arcroom/runtime') || text.includes(runtimePath);
-};
 
 export async function doctor(cwd = process.cwd()): Promise<Check[]> {
   const checks: Check[] = [];
-  const cfg = loadConfig();
+  const cfg = loadConfig(cwd);
   if (!cfg.apiKey) return [{ ok: false, what: 'no key on this laptop', fix: 'arcroom init (key: web app, Settings → API keys)' }];
   checks.push({ ok: true, what: `key ${cfg.apiKey.slice(0, 8)}… in ${join(ARCROOM_HOME, 'config.json')}` });
   if (keyRefused(cfg)) checks.push({ ok: false, what: 'the API refused this key (revoked, or its account deleted)', fix: 'make a new key in the web app, then arcroom init' });
@@ -57,6 +44,8 @@ export async function doctor(cwd = process.cwd()): Promise<Check[]> {
   checks.push(
     wired.length
       ? { ok: true, what: `this folder is set up for ${wired.join(', ')}` }
+      : laptopWide(cwd)
+      ? { ok: true, what: 'laptop-wide hooks cover this repo (arcroom init --everywhere)' }
       : { ok: false, what: 'no agent in this folder runs ArcRoom hooks', fix: 'arcroom init (or arcroom init --agent codex|cursor|opencode) here' },
   );
   if (isOff(cwd)) checks.push({ ok: 'warn', what: 'ArcRoom is switched off for this repo on this laptop', fix: 'arcroom on' });

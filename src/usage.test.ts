@@ -24,3 +24,16 @@ test('skips ids already counted and stops before a half-written line', () => {
   assert.equal(consumed, text.lastIndexOf('\n') + 1);
   assert.ok(seen.has('m3'));
 });
+
+test("Codex's token_count events are counted once each, cached input as cache reads", () => {
+  const tc = (total: number, input: number, cached: number, output: number) =>
+    JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: total }, last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output } } } });
+  const text = [
+    JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5-codex' } }),
+    tc(1100, 1000, 800, 100),
+    tc(1100, 1000, 800, 100), // the same call reported again
+    tc(2300, 1100, 900, 100),
+  ].join('\n') + '\n';
+  const { usage } = sumUsage(text, new Set());
+  assert.deepEqual(usage, { input: 400, output: 200, cache_read: 1700, cache_write: 0, model: 'gpt-5-codex' });
+});

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { clip, toArcroomEvent } from './events.js';
+import { toBatch } from './daemon.js';
 
 const at = new Date('2026-10-24T12:00:00Z');
 const base = { session_id: 's1', cwd: '/repo' };
@@ -62,4 +63,24 @@ test('the prompt is what the person typed, redacted and cut to 1,000 chars', () 
   assert.equal(prompt('fix the bug<system-reminder>internal note</system-reminder>'), 'fix the bug');
   assert.equal(prompt('y'.repeat(5000)).length, 1000);
   assert.ok(!prompt('x'.repeat(990) + ' sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123').includes('abcdef'));
+});
+
+test('a secret file leaves only as "[secret file]", by path or by the command that names it', () => {
+  const pre = (tool_name: string, tool_input: unknown) => toArcroomEvent({ hook_event_name: 'PreToolUse', session_id: 's', tool_name, tool_input }).data.input;
+  assert.deepEqual(pre('Read', { file_path: 'C:/app/.env' }), { file_path: '[secret file]' });
+  assert.deepEqual(pre('Bash', { command: 'cat .env.production' }), { command: '[secret file]' });
+  assert.deepEqual(pre('Read', { file_path: 'C:/app/.env.example' }), { file_path: 'C:/app/.env.example' });
+  assert.deepEqual(pre('Bash', { command: 'npm test' }), { command: 'npm test' });
+});
+
+test('events queued for a repo switched off are never sent', () => {
+  const line = (cwd: string) => JSON.stringify({ v: 1, session: 's', cwd, type: 'prompt', data: {} }) + '\n';
+  const { events } = toBatch(line('C:/work/client') + line('C:/work/private/sub') + line('C:/work/other'), {}, 50, (e) => e, ['C:/work/private']);
+  assert.deepEqual(events.map((e: any) => e.cwd), ['C:/work/client', 'C:/work/other']);
+});
+
+test('a tool call inside a subagent says which subagent ran it', () => {
+  const raw = { hook_event_name: 'PreToolUse', session_id: 's', tool_name: 'Read', tool_use_id: 't', tool_input: { file_path: 'a.ts' } };
+  assert.equal(toArcroomEvent(raw).data.subagent, undefined);
+  assert.equal(toArcroomEvent({ ...raw, agent_id: 'a1', agent_type: 'Explore' }).data.subagent, 'Explore');
 });

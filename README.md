@@ -21,9 +21,9 @@ npx arcroom init --agent codex     # or cursor, opencode (experimental)
 
 ## What leaves your laptop
 
-Prompts (system reminders removed, secrets redacted, first 1,000 characters), file paths, search patterns, shell commands (first 1,000 characters), URLs and web queries, done-check results, git hashes of the files a turn touched, token counts, and what an agent saves on purpose with ArcRoom's tools. **Never file contents, tool output or edit diffs.** Secret files (`.env`, keys) are skipped.
+Prompts (system reminders removed, secrets redacted, first 1,000 characters), file paths, search patterns, shell commands (first 1,000 characters), URLs and web queries, done-check results, git hashes of the files a turn touched, token counts, and what an agent saves on purpose with ArcRoom's tools. **Never file contents, tool output or edit diffs.** A path to a secret file (`.env`, keys), or a command that names one, leaves only as `[secret file]`.
 
-Every upload waits first in `~/.arcroom/spool.jsonl`, so you can read it before it goes. `arcroom off` stops ArcRoom for one repo on this laptop; `arcroom on` starts it again.
+Every event passes through `~/.arcroom/spool.jsonl` on its way out and is sent within seconds; what was sent is kept for 7 days in `~/.arcroom/sent/`, and `arcroom sent` shows it. `arcroom off` stops ArcRoom for one repo on this laptop, including anything still queued for it; `arcroom on` starts it again.
 
 ## If the API is down
 
@@ -37,7 +37,11 @@ Hooks never block a session. Memory lookup gives up after 3 seconds, the prompt 
 | `arcroom whoami` | who the key belongs to |
 | `arcroom doctor` | checks the key, the API, the hooks in this folder and the uploader, and prints the fix for each problem |
 | `arcroom off` / `arcroom on` | stop or restart ArcRoom for this repo |
-| `arcroom checks` / `arcroom checks approve <code>` | read and approve the done-checks in `.arcroom.json` |
+| `arcroom flush` | waits until everything queued was sent: the last step of a CI job (exits 1 if it could not) |
+| `arcroom sent [YYYY-MM-DD] [--all]` | what this laptop sent that day (kept 7 days), exactly as sent with `--all` |
+| `arcroom init --everywhere` | also cover every other clone and worktree of the repos you set up (Claude Code user settings) |
+| `arcroom uninstall [--all]` | take ArcRoom out of this project for every agent; `--all` also deletes `~/.arcroom` |
+| `arcroom checks` / `arcroom checks approve <code>` | read and approve the done-checks in `.arcroom.json` (in CI, where there is no terminal: set `ARCROOM_APPROVE_CHECKS=<code>` in the job's environment) |
 | `arcroom wrong [memo id] [reason]` | report a memory that was wrong |
 | `arcroom decide "<choice>" --why ...` | record a team decision |
 | `arcroom rule [--tag t] [--max-hits n] [--idle-days d]` | team rules for when memory expires |

@@ -4,7 +4,7 @@ import { newKeys } from './blind.js';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isRunning, rotate, toBatch, withCode } from './daemon.js';
+import { isRunning, rotate, toBatch, unsent, withCode } from './daemon.js';
 
 const line = (session: string, type: string, data: object = {}) =>
   JSON.stringify({ v: 1, session, type, at: '2026-10-24T10:00:00Z', data }) + '\n';
@@ -79,4 +79,15 @@ test('a daemon counts as running only when its PID also wrote the heartbeat late
   writeFileSync(beat, '12345');
   assert.equal(isRunning(pid, beat), false); // the heartbeat is another PID's
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('unsent counts the moved-aside rest and the new queue', () => {
+  const d = mkdtempSync(join(tmpdir(), 'arcroom-unsent-'));
+  const spool = join(d, 'spool.jsonl');
+  const sending = join(d, 'sending.jsonl');
+  writeFileSync(spool, 'a\n'.repeat(5));
+  assert.equal(unsent({ offset: 4, seq: {} }, spool, sending), 6);
+  writeFileSync(sending, 'b\n'.repeat(3));
+  assert.equal(unsent({ offset: 6, seq: {} }, spool, sending), 10); // sending fully sent; the new queue is not
+  assert.equal(unsent({ offset: 6, seq: {} }, join(d, 'none'), sending), 0);
 });

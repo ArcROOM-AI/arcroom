@@ -81,3 +81,19 @@ test('an edit is tagged with its repo, branch, file and folder; reads and other 
   assert.equal(codeTag({ ...e, data: { ...e.data, tool: 'Read' } }, s, 'main').data.code, undefined);
   assert.equal(codeTag(e, { root: '/repo', mode: 'off' }, 'main').data.code, undefined);
 });
+
+test("an edit waits once when another agent is editing that same file", async () => {
+  const { clashNote } = await import('./code.js');
+  const now = new Date('2026-10-30T12:00:00Z');
+  const claims = [
+    { k: 'src/billing.ts', by: 'arjun@team.dev', agent: 'Codex', branch: 'main', since: '2026-10-30T11:56:00Z' },
+    { k: 'src', by: 'arjun@team.dev', agent: 'Codex', branch: 'main', since: '2026-10-30T11:56:00Z' },
+  ];
+  assert.equal(
+    clashNote(claims, 'src/billing.ts', 'main', now),
+    "ArcRoom: arjun's Codex is editing src/billing.ts right now (4 min, same branch). Check with them, or work on something else first. To edit it anyway, make this edit again.",
+  );
+  assert.match(clashNote(claims, 'src/billing.ts', 'feature-x', now)!, /on main: a merge conflict/);
+  assert.equal(clashNote(claims, 'src/other.ts', 'main', now), undefined); // the folder alone is not a clash
+  assert.equal(clashNote(undefined, 'src/billing.ts', 'main', now), undefined);
+});

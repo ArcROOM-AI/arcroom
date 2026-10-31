@@ -1,7 +1,8 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { sessionFile } from './loop.js';
 
-// Token meter: reads token usage from the Claude Code transcript (assistant messages carry message.usage).
+// Token meter: reads token usage from the session file: Claude Code's transcript (assistant messages carry message.usage)
+// or Codex's (token_count events).
 // Reads only what's new since last time, and counts each message id once (a message spans several lines).
 
 export type Usage = { input: number; output: number; cache_read: number; cache_write: number; model?: string };
@@ -35,6 +36,19 @@ export function sumUsage(text: string, seen: Set<string>): { usage: Usage; consu
       e = JSON.parse(line);
     } catch {
       continue;
+    }
+    // Codex's session file: the model in turn_context, and a token_count event after each model call. A repeated event
+    // carries the same running total, which is its id here. Its input includes the cached part; reasoning is in output.
+    if (e?.type === 'turn_context' && typeof e.payload?.model === 'string') usage.model = e.payload.model;
+    const info = e?.type === 'event_msg' && e.payload?.type === 'token_count' ? e.payload.info : undefined;
+    const last = info?.last_token_usage;
+    const id = `codex:${info?.total_token_usage?.total_tokens}`;
+    if (last && !seen.has(id)) {
+      seen.add(id);
+      const cached = last.cached_input_tokens ?? 0;
+      usage.input += Math.max(0, (last.input_tokens ?? 0) - cached);
+      usage.cache_read += cached;
+      usage.output += last.output_tokens ?? 0;
     }
     const m = e?.type === 'assistant' ? e.message : undefined;
     if (m?.usage && m.id && !seen.has(m.id)) latest.set(m.id, m);

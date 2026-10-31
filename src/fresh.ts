@@ -1,27 +1,34 @@
 import { git } from './git.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 // Is a stored memory still true for this checkout? Steps keep the git blob hash of each file they touched (taken on
 // the laptop at the end of the turn; hashes only, no content). Before handing steps over, each file is looked up here:
 //   same hash   → as it was
 //   other hash  → changed since: kept, flagged so the agent checks before trusting it
-//   missing     → renamed if a file here has the saved hash (followed to its new path); otherwise deleted (dropped)
+//   missing     → renamed if a file here has the saved hash (followed to its new path), or moved and edited if exactly
+//                 one file here has its name (followed, flagged as changed); otherwise deleted (dropped)
 //                 when the task read it, or created by the task when it only wrote it (still a target)
 // More than half the files it read deleted: the steps are stale and nothing is handed over. All local, no network.
 
 /** Git's blob id for a file's bytes (the same id `git hash-object` prints), so it works with or without git. */
 export const blobHash = (bytes: Buffer) => createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 
+/** A text file's bytes with Windows line ends as LF, so a Windows and a Mac checkout of it hash the same; a binary file
+ *  (one with a NUL byte) stays as it is. Every hash saved with steps or answers is taken over these bytes. */
+export const lf = (bytes: Buffer) => (bytes.includes(0) ? bytes : Buffer.from(bytes.toString('latin1').replaceAll('\r\n', '\n'), 'latin1'));
+
 export type Probe = {
   exists: (path: string) => boolean;
   hash?: (path: string) => string | undefined;
   /** a file here with this hash, other than the given paths (for renames) */
   find?: (hash: string, like: string) => string | undefined;
+  /** the one file here with this file's name, if exactly one (a move that also edited it) */
+  sameName?: (like: string) => string | undefined;
 };
 
-const MAX_SCAN = 2000; // ponytail: rename search hashes candidate files; index blob ids instead if repos get huge
+const MAX_SCAN = 2000; // files hashed when git's index has no match (no git, untracked files, CRLF committed)
 const MAX_READ = 5_000_000;
 
 /**
@@ -49,22 +56,38 @@ export function checkout(cwd: string): Probe {
   const hash = (p: string) => {
     const file = localFile(cwd, p);
     try {
-      return file ? blobHash(readFileSync(file)) : undefined;
+      return file ? blobHash(lf(readFileSync(file))) : undefined;
     } catch {
       return undefined;
     }
   };
+  // git's index: every tracked file with its blob id, in one call and without opening a file, at any repo size
+  let index: Map<string, string> | undefined;
+  const tracked = () =>
+    (index ??= new Map(
+      (git(['ls-files', '-s', '-z'], { cwd, timeout: 5000 }).stdout ?? '').split('\0').flatMap((e) => {
+        const m = /^\d+ ([0-9a-f]{40,64}) \d\t([\s\S]+)$/.exec(e);
+        return m ? [[m[2], m[1]] as [string, string]] : [];
+      }),
+    ));
   let files: string[] | undefined;
   const list = () => {
     if (files) return files;
-    const r = git(['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, timeout: 1500 });
+    const r = git(['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, timeout: 5000 });
     files = r.status === 0 ? (r.stdout ?? '').split('\n').filter(Boolean).slice(0, MAX_SCAN) : [];
     return files;
   };
   return {
     exists: (p) => !!localFile(cwd, p),
     hash,
+    sameName: (like) => {
+      const name = basename(like);
+      const hits = [...tracked().keys()].filter((p) => basename(p) === name && !!localFile(cwd, p));
+      return hits.length === 1 ? hits[0] : undefined;
+    },
     find: (want, like) => {
+      // a tracked file git already knows by this id, still the same on disk
+      for (const [p, id] of tracked()) if (id === want && hash(p) === want) return p;
       // same extension first (a move keeps it), then everything; only files that exist and are not huge
       const ext = extname(like);
       const pool = [...list().filter((f) => extname(f) === ext), ...list().filter((f) => extname(f) !== ext)];
@@ -103,9 +126,13 @@ export function freshen(steps: string[], saved: Record<string, string> = {}, pro
       if (was && probe.hash && probe.hash(f) !== was) changed.add(f);
       continue;
     }
-    const to = saved[f] && probe.find ? probe.find(saved[f], f) : undefined;
-    if (to && !named.has(to)) moved.set(f, to);
-    else if (read.has(f)) deleted.add(f);
+    const same = saved[f] && probe.find ? probe.find(saved[f], f) : undefined;
+    // ponytail: moved-and-edited is found by its name only; one renamed and edited at once still reads as deleted
+    const to = same ?? probe.sameName?.(f);
+    if (to && !named.has(to)) {
+      moved.set(f, to);
+      if (!same) changed.add(to);
+    } else if (read.has(f)) deleted.add(f);
     else created.add(f);
   }
   const out = steps.flatMap((s) => {
@@ -132,7 +159,7 @@ export function hashFiles(cwd: string, paths: Iterable<string>): Record<string, 
     const rel = relative(cwd, isAbsolute(p) ? p : join(cwd, p)).replaceAll('\\', '/');
     if (!rel || rel.startsWith('..')) continue;
     try {
-      out[rel] = blobHash(readFileSync(join(cwd, rel)));
+      out[rel] = blobHash(lf(readFileSync(join(cwd, rel))));
     } catch {
       /* deleted during the turn: nothing to remember */
     }

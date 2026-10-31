@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import { projectOf } from './git.js';
 import { redact } from './redact.js';
 
 /**
@@ -39,12 +40,19 @@ export function setOff(root: string, off: boolean, file = OFF_FILE): void {
 // ArcRoom API (the Oracle server behind Caddy). A local API: arcroom init --url http://localhost:8787
 export const DEFAULT_URL = 'https://api.arcroomai.com';
 
-export type Config = { apiKey: string; url: string };
+/** workspace: its name when init last checked the key, shown when a session starts. repos: a repo's own key (by its git
+ *  remote, else its folder) when it sends to another workspace than the laptop's default, e.g. another client's. */
+export type RepoKey = { apiKey: string; workspace?: string };
+/** setUp: the repos `arcroom init` ran in (git remote, else folder); laptop-wide hooks act only in these. */
+export type Config = { apiKey: string; url: string; workspace?: string; repos?: Record<string, RepoKey>; setUp?: string[] };
 
-/** ~/.arcroom/config.json written by `arcroom init`. */
-export function loadConfig(): Config {
+/** ~/.arcroom/config.json written by `arcroom init`; with `cwd`, the key of the repo it is in (its own, else the default). */
+export function loadConfig(cwd?: string): Config {
   const file = join(ARCROOM_HOME, 'config.json');
-  return { url: DEFAULT_URL, apiKey: '', ...(existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}) };
+  const saved: Config = { url: DEFAULT_URL, apiKey: '', ...(existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}) };
+  if (!cwd || !saved.repos || !Object.keys(saved.repos).length) return saved; // no git call unless some repo has its own key
+  const own = saved.repos[projectOf(cwd)];
+  return own ? { ...saved, apiKey: own.apiKey, workspace: own.workspace } : saved;
 }
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);

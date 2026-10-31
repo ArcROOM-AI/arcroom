@@ -154,3 +154,34 @@ export function codeNoteBody(args: { path?: string; text?: string; kind?: string
     ...(args.ttl_hours ? { ttl_hours: args.ttl_hours } : {}),
   };
 }
+
+/** Another agent's claim on this file (its edits claim a file for 10 minutes), as the reason an edit waits; else undefined. */
+export function clashNote(claims: any[] | undefined, rel: string, branch: string, now = new Date()): string | undefined {
+  const c = (claims ?? []).find((c) => c?.k === rel);
+  if (!c) return undefined;
+  const where = c.branch && c.branch !== branch ? `on ${c.branch}: a merge conflict if you both change it` : 'same branch';
+  return (
+    `ArcRoom: ${short(c.by)}'s ${c.agent ?? 'agent'} is editing ${rel} right now (${minutes(c.since, now)} min, ${where}). ` +
+    'Check with them, or work on something else first. To edit it anyway, make this edit again.'
+  );
+}
+
+/**
+ * Before this session's first edit of a file: another agent editing that same file right now, as the reason the edit
+ * waits once (the agent sees it; the same edit again goes through). One lookup per file per session; any failure is no clash.
+ * ponytail: someone who starts on the file after your first edit shows up at your next prompt (the code map), not here
+ */
+export async function editClash(cfg: Config, session: string, cwd: string, file: unknown, timeoutMs = 1000): Promise<string | undefined> {
+  if (typeof file !== 'string' || !cwd || !cfg.apiKey) return undefined;
+  const s = codeSetup(cwd);
+  if (!s || s.mode !== 'standard') return undefined;
+  const rel = repoPath(s.root, file, cwd);
+  if (!rel || rel === '.') return undefined;
+  const seenFile = sessionFile(session, '.clash');
+  const seen: string[] = existsSync(seenFile) ? JSON.parse(readFileSync(seenFile, 'utf8')) : [];
+  if (seen.includes(rel)) return undefined;
+  writeFileSync(seenFile, JSON.stringify([...seen, rel].slice(-500)));
+  const branch = currentBranch(s.root);
+  const look: Look | undefined = await api(cfg, '/v1/code/look', { repo: repoKey(s), branch, nodes: [dirOf(rel)], session }, timeoutMs).catch(() => undefined);
+  return clashNote(look?.claims, rel, branch);
+}

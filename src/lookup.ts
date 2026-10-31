@@ -46,7 +46,7 @@ const CODE_MS = 1200; // the code map is the extra: it never holds recall up
 export async function lookup(prompt: string, cwd: string, session: string, given: Set<string>): Promise<Lookup> {
   const [r, code] = await Promise.all([
     recall(prompt, cwd, projectOf(cwd), given, RECALL_MS).catch(() => undefined),
-    codeContext(loadConfig(), cwd, session, prompt, CODE_MS).catch(() => undefined),
+    codeContext(loadConfig(cwd), cwd, session, prompt, CODE_MS).catch(() => undefined),
   ]);
   if (!r) markDown();
   return { recall: r ?? {}, ...(code ? { code } : {}), ...(r ? {} : { offline: true as const }) };

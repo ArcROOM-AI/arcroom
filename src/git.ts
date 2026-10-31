@@ -34,3 +34,14 @@ export function git(args: string[], opts: { cwd?: string; timeout?: number; maxB
   const r = spawnSync(bin, [...SAFE, ...args], { encoding: 'utf8', windowsHide: true, ...opts });
   return { status: r.status, stdout: r.stdout as string | undefined };
 }
+
+/** Project id shared by everyone on the repo: its git remote without protocol/credentials/.git, else the folder path. */
+export function projectOf(cwd: string): string {
+  const remote = git(['config', '--get', 'remote.origin.url'], { cwd }).stdout?.trim();
+  if (!remote) return cwd.replaceAll('\\', '/').toLowerCase();
+  return remote
+    .replace(/^[a-z+]+:\/\/(?:[^@/]+@)?/i, '') // https://user:token@host/... -> host/...
+    .replace(/^[^@]+@([^:]+):/, '$1/') // git@host:owner/repo -> host/owner/repo
+    .replace(/\.git$/, '')
+    .toLowerCase();
+}

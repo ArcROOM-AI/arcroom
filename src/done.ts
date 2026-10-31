@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { hashFiles } from './fresh.js';
+import { git } from './git.js';
 import { ARCROOM_HOME } from './home.js';
 import { sessionFile } from './loop.js';
+import { projectOf } from './session.js';
 
 // Finish line: on Stop, if this turn edited files, the project's done-checks (.arcroom.json "doneChecks") must have passed
 // since the last edit. The hook never runs them itself: it blocks the stop and asks the agent to run them with its own
@@ -14,6 +16,8 @@ import { sessionFile } from './loop.js';
 // a cloned repo, a pull request or an agent's edit that adds or changes them asks for nothing until then.
 
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+/** The tools a done-check can run in: Bash, and PowerShell on Windows. */
+export const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 export const MAX_BLOCKS = 2;
 const MAX_PASSED = 50;
 
@@ -31,8 +35,9 @@ const succeeded = (r: any) =>
 
 /** True when this Bash command ran the check: as written, or last after `cd … &&` / `;`. */
 export const ranCheck = (command: string, check: string) => {
-  const c = check.trim();
-  return command === c || command.endsWith(`&& ${c}`) || command.endsWith(`; ${c}`);
+  const one = (s: string) => s.trim().replace(/\s+/g, ' '); // extra spaces don't make it a different command
+  const [cmd, c] = [one(command), one(check)];
+  return cmd === c || cmd.endsWith(`&& ${c}`) || cmd.endsWith(`; ${c}`);
 };
 
 /**
@@ -40,7 +45,7 @@ export const ranCheck = (command: string, check: string) => {
  * Bash command that succeeded since the last edit (a done-check the agent ran).
  */
 export function track(state: DoneState, raw: Record<string, any>): DoneState {
-  if (raw.hook_event_name === 'PostToolUse' && raw.tool_name === 'Bash') {
+  if (raw.hook_event_name === 'PostToolUse' && SHELL_TOOLS.has(raw.tool_name)) {
     const command = String(raw.tool_input?.command ?? '').trim();
     const passed = state.passed ?? [];
     if (!command || command.length > 500 || passed.includes(command) || passed.length >= MAX_PASSED || !succeeded(raw.tool_response)) return state;
@@ -72,20 +77,23 @@ export function decide(pending: string[], blocks: number): 'done' | 'block' | 'p
 
 export function blockReason(pending: string[], cwd: string): string {
   return (
-    `ArcRoom done-checks: before you stop, run ${pending.length > 1 ? 'each of these' : 'this'} with your Bash tool from ${cwd}, ` +
+    `ArcRoom done-checks: before you stop, run ${pending.length > 1 ? 'each of these' : 'this'} with your shell tool (Bash or PowerShell) from ${cwd}, ` +
     `exactly as written, and fix anything that fails:\n${pending.map((c) => `- \`${c}\``).join('\n')}`
   );
 }
 
+/** The repo's top folder: .arcroom.json lives there, so the checks hold in every subfolder and worktree. */
+const rootOf = (cwd: string) => git(['rev-parse', '--show-toplevel'], { cwd }).stdout?.trim() || cwd;
+
 export function loadChecks(cwd: string): string[] {
-  const file = join(cwd, '.arcroom.json');
+  const file = join(rootOf(cwd), '.arcroom.json');
   if (!existsSync(file)) return [];
   const checks = JSON.parse(readFileSync(file, 'utf8')).doneChecks;
   // control characters (escape codes, carriage returns, newlines) could hide a command from the person approving it
   return Array.isArray(checks) ? checks.filter((c) => typeof c === 'string' && c.trim() && !/[\x00-\x1f\x7f]/.test(c)) : [];
 }
 
-/** folder -> sha256 of the done-checks approved there */
+/** repo (its git remote, else its folder) -> sha256 of the done-checks approved there */
 export type Approvals = Record<string, string>;
 const APPROVED = join(ARCROOM_HOME, 'approved-checks.json');
 export const checksHash = (checks: string[]) => createHash('sha256').update(JSON.stringify(checks)).digest('hex');
@@ -98,15 +106,22 @@ export function readApprovals(): Approvals {
   }
 }
 
-/** True only when these exact commands were approved for this folder. */
-export const isApproved = (cwd: string, checks: string[], approvals: Approvals) => approvals[resolve(cwd)] === checksHash(checks);
+/** Approvals are per repo, so every clone, worktree and subfolder of it on this laptop shares one. */
+const repoOf = (cwd: string) => projectOf(rootOf(cwd));
+
+/** True only when these exact commands were approved for this repo (or, before approvals were per repo, this folder).
+ *  In CI there is no terminal to approve in: ARCROOM_APPROVE_CHECKS=<the code arcroom checks prints>, set in the job's own
+ *  environment (an agent cannot set it for the hook), approves the same exact commands. */
+export const isApproved = (cwd: string, checks: string[], approvals: Approvals, ci = process.env.ARCROOM_APPROVE_CHECKS) =>
+  [repoOf(cwd), resolve(cwd)].some((k) => approvals[k] === checksHash(checks)) ||
+  (!!ci && ci.length >= 8 && checksHash(checks).startsWith(ci));
 
 /** `arcroom checks approve <code>`: the person approves the folder's done-checks they were shown (`code` = the first
  *  8 characters of their hash, printed by `arcroom checks`); null when the file no longer holds those checks. */
 export function approveChecks(cwd: string, code: string): string[] | null {
   const checks = loadChecks(cwd);
   if (code.length < 8 || !checksHash(checks).startsWith(code)) return null;
-  const approvals = { ...readApprovals(), [resolve(cwd)]: checksHash(checks) };
+  const approvals = { ...readApprovals(), [repoOf(cwd)]: checksHash(checks) };
   mkdirSync(ARCROOM_HOME, { recursive: true, mode: 0o700 });
   writeFileSync(APPROVED, JSON.stringify(approvals, null, 2) + '\n', { mode: 0o600 });
   return checks;
@@ -114,7 +129,7 @@ export function approveChecks(cwd: string, code: string): string[] | null {
 
 const read = (file: string): DoneState => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { edited: false, blocks: 0 });
 
-/** PreToolUse / PostToolUse: remember what this turn edited, and the Bash commands that passed after that. */
+/** PreToolUse / PostToolUse: remember what this turn edited, and the shell commands that passed after that. */
 export function noteEdit(raw: Record<string, any>): void {
   const file = sessionFile(String(raw.session_id), '.done');
   const state = read(file);
