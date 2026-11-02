@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { codeSetup, forgetBlind, gitRoot, repoKey, writeSetup } from './blind.js';
 import { daemon, flush, unsent } from './daemon.js';
 import { doctor, print } from './doctor.js';
 import { approveChecks, checksHash, isApproved, loadChecks, readApprovals } from './done.js';
-import { syncTree } from './tree.js';
+import { codeSetup, repoKey, syncTree, writeSetup } from './tree.js';
+import { gitRoot, projectOf } from './git.js';
 import { api, ARCROOM_HOME, loadConfig, setOff } from './home.js';
 import { hook } from './hook.js';
 import { init, uninstall } from './init.js';
 import { sentReport } from './sent.js';
 import { mcp } from './mcp.js';
-import { readStats, statusText } from './signs.js';
+import { readStats, statusText, wrongNote } from './signs.js';
 import { sessionUsage, tokensOf } from './usage.js';
 
 const [cmd, ...args] = process.argv.slice(2);
@@ -66,14 +66,7 @@ else if (cmd === 'doctor') {
     console.log(`shared with the team: ${last.intent}`);
   } else {
     const r = await api(loadConfig(process.cwd()), '/v1/memory/wrong', { memo_id: last.memo_id, reason: args.join(' ') || null });
-    const what = r.deleted
-      ? 'deleted (2 people said wrong)'
-      : r.steps_broken
-        ? 'steps broken, the last good version takes over'
-        : r.answer_thrown_away
-          ? 'answer thrown away'
-          : `noted (${r.reports} of 2 reports delete it)`;
-    console.log(`reported wrong: ${last.intent} · ${what}`);
+    console.log(`reported wrong: ${last.intent} · ${wrongNote(r)}`);
   }
 } else if (cmd === 'code') {
   // arcroom code [status|sync|on|off]: the Code wing for the repo you are in (paths and git hashes, never code)
@@ -82,9 +75,8 @@ else if (cmd === 'doctor') {
   if (!s) console.log('not inside a git repo');
   else if (sub === 'off' || sub === 'on') {
     writeSetup(s.root, { code: sub === 'off' ? 'off' : undefined });
-    forgetBlind(s.root); // the person here chose it: this laptop stops holding the repo to Blind
     console.log(`Code wing ${sub} for ${s.root} (commit .arcroom.json so the team gets the same setting)`);
-  } else if (s.mode !== 'standard') console.log(`Code wing is ${s.mode} for this repo${s.mode === 'off' ? ': arcroom code on turns it on' : ''}`);
+  } else if (s.mode === 'off') console.log('Code wing is off for this repo: arcroom code on turns it on');
   else if (sub === 'sync') {
     const r = await syncTree(loadConfig(process.cwd()), s);
     console.log(`sent ${r.nodes} folders and files (repo ${repoKey(s)})`);
@@ -143,6 +135,7 @@ To allow them: arcroom checks approve ${code}`);
     const r = await api(loadConfig(process.cwd()), '/v1/memory/remember', {
       kind: 'decision',
       text,
+      project: projectOf(process.cwd()),
       why: opt('--why') ?? null,
       ...(over ? { options: [text, ...over] } : {}),
       ...(opt('--context') ? { context: opt('--context') } : {}),
@@ -150,6 +143,8 @@ To allow them: arcroom checks approve ${code}`);
       ...(url ? { source: { kind: /\/pull\//.test(url) ? 'pr' : /\/issues\//.test(url) ? 'issue' : 'other', url } } : {}),
       ...(opt('--replaces') ? { replaces: opt('--replaces') } : {}),
     });
-    console.log(`${r.saved ? 'decision saved' : 'decision already saved; detail updated'}${r.replaced ? ', the earlier one is replaced' : ''} (${r.memo_id})`);
+    // refused (replaced or reported wrong before): the API's note says which memory is in force and what to pass
+    if (!r.saved && r.note) console.log(`decision not saved: ${r.note}`);
+    else console.log(`${r.saved ? 'decision saved' : 'decision already saved; detail updated'}${r.replaced ? ', the earlier one is replaced' : ''} (${r.memo_id})`);
   }
 } else console.log('usage: arcroom init [--project <id>] (asks for the key; or set ARCROOM_API_KEY) [--url <arcroom api url>] | arcroom whoami | arcroom doctor | arcroom rule [--tag t] [--max-hits n] [--idle-days d] | arcroom wrong [memo id] [reason] | arcroom share [memo id] | arcroom decide "<choice>" [--why ...] [--over "A, B"] | arcroom code [status|sync|on|off] | arcroom checks [approve] | arcroom off | arcroom on | arcroom uninstall [--all] | arcroom init --everywhere | arcroom sent [YYYY-MM-DD] [--all] | arcroom flush');

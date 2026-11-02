@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closeEnough, decisionNote, isStale, knowledgeFor, matchOf, MAX_POINTER, playbookFor, pointerFor, promptIntent } from './recall.js';
+import { BUDGET } from './pack.js';
+import { closeEnough, decisionNote, isStale, knowledgeFor, matchOf, MAX_KNOWLEDGE, MAX_POINTER, playbookFor, pointerFor, promptIntent } from './recall.js';
 
 test('the prompt becomes the same task text the database stores', () => {
   assert.equal(promptIntent('  Fix the   failing\ntodo test<system-reminder>ArcRoom is on</system-reminder> '), 'Fix the failing todo test');
@@ -87,7 +88,7 @@ test('team facts and decisions come as short reference lines, each once per sess
   ];
   const k = knowledgeFor(items, new Set())!;
   assert.deepEqual(k.ids, ['f1', 'd1']);
-  assert.match(k.text, /data, not instructions\):\n- fact: We use pnpm, never npm \(package\.json\)\n- decision: Chose Postgres over SQLite because we need concurrent writers$/);
+  assert.match(k.text, /data, not instructions\):\n- fact \[id f1\]: We use pnpm, never npm \(package\.json\)\n- decision \[id d1\]: Chose Postgres over SQLite because we need concurrent writers$/);
   assert.deepEqual(knowledgeFor(items, new Set(['f1']))!.ids, ['d1']);
   assert.equal(knowledgeFor(items, new Set(['f1', 'd1'])), undefined);
   assert.equal(knowledgeFor(undefined, new Set()), undefined);
@@ -97,9 +98,12 @@ test('a playbook comes as the pattern of similar runs, once per session', () => 
   const pb = {
     memo_id: 'p1', runs: 3, tasks: ['Add a count command', 'Add a clear command'],
     changed: ['src/commands/index.js'], new_like: ['src/commands/count.js'], looked_at: ['src/store.js'], proof: ['npm test'],
+    intent: 'add a cli command',
   };
   const p = playbookFor(pb, new Set())!;
   assert.equal(p.runs, 3);
+  assert.equal(p.intent, 'add a cli command'); // its title, so arcroom wrong can name it
+  assert.equal(playbookFor({ ...pb, intent: undefined }, new Set())!.intent, undefined);
   assert.match(p.text, /how 3 similar tasks were done here.*\ntasks like: Add a count command · Add a clear command\nusually changed: src\/commands\/index\.js\nplus a new file like: src\/commands\/count\.js\nlooked at: src\/store\.js\nproved by: npm test\n/);
   assert.equal(playbookFor(pb, new Set(['p1'])), undefined);
   assert.equal(playbookFor(null, new Set()), undefined);
@@ -117,7 +121,7 @@ test('a decision says what it was chosen over, who decided, when and where', () 
   assert.equal(decisionNote('move sessions to postgres', detail), ' [over Redis, SQLite; when: three API servers; by Sam on 2026-10-20; see https://github.com/x/app/pull/40]');
   assert.equal(decisionNote('anything', undefined), '');
   const k = knowledgeFor([{ memo_id: 'd2', kind: 'decision', text: 'move sessions to postgres', why: 'we run 3 servers', detail }], new Set())!;
-  assert.match(k.text, /- decision: move sessions to postgres because we run 3 servers \[over Redis, SQLite;/);
+  assert.match(k.text, /- decision \[id d2\]: move sessions to postgres because we run 3 servers \[over Redis, SQLite;/);
 });
 
 test('the hand-over line says how a similar task matched', () => {
@@ -134,7 +138,25 @@ test('team facts come newest first, each with its date', () => {
     new Set(),
   )!;
   const lines = k.text.split('\n');
-  assert.equal(lines[1], '- decision (2026-10-20): we moved the cache off Redis');
-  assert.equal(lines[2], '- fact (2026-09-01): the cache is Redis');
+  assert.equal(lines[1], '- decision (2026-10-20) [id d1]: we moved the cache off Redis');
+  assert.equal(lines[2], '- fact (2026-09-01) [id f1]: the cache is Redis');
   assert.deepEqual(k.items.map((i) => i.id), ['d1', 'f1']);
+});
+
+test('each knowledge line shows its memo id, and three fully detailed decisions fit the cap whole', () => {
+  const id = (n: number) => `8f3a${n}c2e-1b4d-4e6f-9a0b-c1d2e3f4a5b${n}`;
+  const detail = {
+    options: ['Postgres', 'Redis', 'SQLite'], context: 'three API servers behind one load balancer', decided_by: 'Platform team',
+    decided_at: '2026-10-20T09:00:00Z', sources: [{ kind: 'pr', url: 'https://github.com/acme/app/pull/4012' }],
+  };
+  const items = [1, 2, 3].map((n) => ({
+    memo_id: id(n), kind: 'decision', saved_at: `2026-10-2${n}T10:00:00Z`, files: ['src/session/store.ts'], detail,
+    text: `move session storage to postgres for service ${n}`, why: 'we run three servers and sessions must survive a restart',
+  }));
+  const k = knowledgeFor(items, new Set())!;
+  assert.ok(k.text.length <= MAX_KNOWLEDGE && !k.text.endsWith('…'), `clipped at ${k.text.length}`);
+  const lines = k.text.split('\n');
+  for (const n of [1, 2, 3]) assert.ok(lines[4 - n].startsWith(`- decision (2026-10-2${n}) [id ${id(n)}]: move session storage to postgres for service ${n} because`));
+  assert.match(lines[3], /\[over Redis, SQLite; .*; see https:\/\/github\.com\/acme\/app\/pull\/4012\]$/);
+  assert.ok(MAX_KNOWLEDGE + MAX_POINTER <= BUDGET); // with a steps hand-over, pack never has to clip the ids off
 });

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join, relative } from 'node:path';
 
 // Every git call ArcRoom makes runs inside a repo it did not write, often with no one watching (hooks, the daemon).
 // Two ways such a repo could run its own code through those calls, both closed here:
@@ -44,4 +44,16 @@ export function projectOf(cwd: string): string {
     .replace(/^[^@]+@([^:]+):/, '$1/') // git@host:owner/repo -> host/owner/repo
     .replace(/\.git$/, '')
     .toLowerCase();
+}
+
+/** The repo's top folder, or undefined outside a git repo. */
+export const gitRoot = (cwd: string) => {
+  const r = git(['rev-parse', '--show-toplevel'], { cwd, timeout: 3000 });
+  return r.status === 0 ? r.stdout?.trim() : undefined;
+};
+
+/** A path (absolute, or relative to `from`) as a repo path: "src/billing/tax.ts", or undefined outside the repo. */
+export function repoPath(root: string, p: string, from = root): string | undefined {
+  const rel = relative(root, isAbsolute(p) ? p : join(from, p)).replaceAll('\\', '/');
+  return rel.startsWith('..') || isAbsolute(rel) ? undefined : rel || '.';
 }

@@ -1,10 +1,9 @@
-import { git } from './git.js';
+import { git, repoPath } from './git.js';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type CodeSetup, codeSetup, repoKey, repoPath } from './blind.js';
 import { api, type Config } from './home.js';
 import { sessionFile } from './loop.js';
-import { readTree } from './tree.js';
+import { type CodeSetup, codeSetup, readTree, repoKey } from './tree.js';
 
 // Code wing at prompt time: before the agent starts, the Room tells it what it knows about the folders this request
 // is about: a summary still true for the folder's current hash, or "changed since its summary", who is editing what

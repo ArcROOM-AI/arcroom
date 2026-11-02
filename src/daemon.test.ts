@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newKeys } from './blind.js';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isRunning, rotate, toBatch, unsent, withCode } from './daemon.js';
+import { git } from './git.js';
+import { codeSetup, repoKey, syncBody } from './tree.js';
 
 const line = (session: string, type: string, data: object = {}) =>
   JSON.stringify({ v: 1, session, type, at: '2026-10-24T10:00:00Z', data }) + '\n';
@@ -36,18 +37,22 @@ test('redacts secrets before upload', () => {
   assert.equal((events[0].data as { prompt: string }).prompt, 'use key [REDACTED]');
 });
 
-test('a Blind repo sends no file contents, command output or plain paths', () => {
-  const s = { root: '/repo', mode: 'blind' as const, keys: newKeys() };
-  const setup = () => ({ s, branch: 'main' });
-  const write = withCode({ type: 'tool.start', cwd: '/repo', data: { tool: 'Write', input: { file_path: '/repo/src/secret.ts', content: 'const KEY = 1' } } }, setup);
-  assert.equal(write.data.input.content, undefined);
-  assert.match(write.data.input.file_path, /^k_[0-9a-f]{24}$/);
-  assert.equal(write.cwd, undefined);
-  const out = withCode({ type: 'tool.end', cwd: '/repo', data: { tool: 'Read', output: 'file text' } }, setup);
-  assert.equal(out.data.output, undefined);
-  // the same event in a Standard repo keeps its content
-  const std = withCode({ type: 'tool.start', cwd: '/repo', data: { tool: 'Write', input: { file_path: '/repo/a.ts', content: 'x' } } }, () => ({ s: { root: '/repo', mode: 'standard' as const }, branch: 'main' }));
-  assert.equal(std.data.input.content, 'x');
+test('a repo whose .arcroom.json still says "code": "blind" is a standard repo: plain paths, contents kept, edits tagged', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arcroom-was-blind-'));
+  git(['init', '-q'], { cwd: repo });
+  writeFileSync(join(repo, '.arcroom.json'), JSON.stringify({ code: 'blind', key: 'fp123' }));
+  const s = codeSetup(repo)!;
+  assert.equal(s.mode, 'standard');
+  const write = withCode({ type: 'tool.start', cwd: s.root, data: { tool: 'Write', input: { file_path: join(s.root, 'src', 'a.ts'), content: 'x' } } }, () => ({ s, branch: 'main' }));
+  assert.equal(write.data.input.content, 'x');
+  assert.deepEqual(write.data.code, { repo: repoKey(s), branch: 'main', node: 'src/a.ts', dir: 'src', agent: 'claude' });
+  // its tree goes to the Room as a standard repo's, with plain paths
+  const tree = new Map([['.', { kind: 'dir' as const, hash: 'r1' }], ['src', { kind: 'dir' as const, hash: 'd1' }], ['src/a.ts', { kind: 'file' as const, hash: 'f1' }]]);
+  const { body } = syncBody(s, tree, { branch: 'main', def: 'main', ahead: 0, all: ['main'], merged: ['main'] }, undefined);
+  assert.equal(body.mode, 'standard');
+  assert.equal(body.fingerprint, undefined);
+  assert.deepEqual(body.nodes.map((n) => [n.k, n.p]), [['.', undefined], ['src', '.'], ['src/a.ts', 'src']]);
+  rmSync(repo, { recursive: true, force: true });
 });
 
 test('a fully sent queue is moved aside, read to its end, then deleted', () => {

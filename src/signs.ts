@@ -73,6 +73,16 @@ export function signFor(tool: string, input: any, r: any): { message: string; st
   return undefined;
 }
 
+/** What `arcroom wrong` did, from the report's reply: the same outcome the website's toast names. */
+export function wrongNote(r: any): string {
+  if (r?.deleted) return 'deleted (2 people said wrong)';
+  const done = [
+    r?.steps_broken ? (r.fallback_version ? `steps broken, steps v${r.fallback_version} take over` : 'steps broken, the next run plans again') : '',
+    r?.answer_thrown_away ? 'answer thrown away' : '',
+  ].filter(Boolean);
+  return done.length ? done.join(', ') : `noted (${r?.reports} of 2 reports delete it)`;
+}
+
 /** The status line: ArcRoom is live, the tokens this session used and saved, then what it did. */
 export function statusText(s: Stats, used = 0): string {
   const tokens = [used && `${compact(used)} tokens used`, s.tokens_saved && `${compact(s.tokens_saved)} saved`].filter(Boolean) as string[];
