@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.6-beta
+
+- Hand-overs carry the whole ask (up to 1,000 characters), not its first 200, so a session stopped mid-job no longer loses the steps that were left to do. A session that never closed no longer shows a wrong "0 tool calls".
+- Saving an answer that depends on a folder (`feedback/`) no longer freezes the session: the folder counts as the files in it, and every error ArcRoom's tools return is one Claude Code can read.
+
 ## 0.0.5-beta
 
 - Team facts and decisions belong to the repo they were saved in, so they are handed out there and not in every repo.

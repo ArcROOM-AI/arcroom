@@ -2,9 +2,9 @@
 // Hand-rolled instead of the SDK so it runs from the copied runtime with no node_modules.
 import { git, projectOf } from './git.js';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { api, isOff, keyRefused, loadConfig } from './home.js';
 import { hooksHere, setUpHere } from './scope.js';
@@ -252,12 +252,25 @@ export type Context = { claimant: string; branch: string | null; cwd: string };
 
 const sha256 = (file: string) => createHash('sha256').update(lf(readFileSync(file))).digest('hex');
 
-/** {"file:<path>": sha256} for files the answer depends on; a missing file is recorded as "missing". */
+// ponytail: a file added to the folder later is not noticed, only changed or removed ones; hash the listing if that matters
+/** The files in a folder an answer depends on (agents name "feedback/" as often as a file), at most 200, no .git or node_modules. */
+function filesIn(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (out.length >= 200) break;
+    if (e.name === '.git' || e.name === 'node_modules') continue;
+    if (e.isDirectory()) filesIn(join(dir, e.name), out);
+    else if (e.isFile()) out.push(join(dir, e.name));
+  }
+  return out;
+}
+
+/** {"file:<path>": sha256} for files the answer depends on (a folder: each file in it); a missing file is recorded as "missing". */
 export function fileDeps(paths: string[], cwd: string): Record<string, string> {
   return Object.fromEntries(
-    paths.map((p) => {
-      const rel = relative(cwd, resolve(cwd, p)).replaceAll('\\', '/');
-      return [`file:${rel}`, existsSync(resolve(cwd, rel)) ? sha256(resolve(cwd, rel)) : 'missing'];
+    paths.flatMap((p) => {
+      const full = resolve(cwd, p);
+      const files = existsSync(full) && statSync(full).isDirectory() ? filesIn(full) : [full];
+      return files.map((f) => [`file:${relative(cwd, f).replaceAll('\\', '/')}`, existsSync(f) ? sha256(f) : 'missing']);
     }),
   );
 }
@@ -391,7 +404,8 @@ export async function mcp(): Promise<void> {
       const result = await handle(msg.method, msg.params, call, ctx);
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n');
     } catch (err: any) {
-      const error = { code: err?.code ?? -32603, message: err?.message ?? String(err) };
+      // JSON-RPC codes are numbers: a Node error's "EISDIR" makes Claude Code drop the reply and wait for ever
+      const error = { code: Number.isInteger(err?.code) ? err.code : -32603, message: err?.message ?? String(err) };
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error }) + '\n');
     }
   }

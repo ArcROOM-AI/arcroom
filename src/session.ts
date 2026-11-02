@@ -33,13 +33,17 @@ export function lastRunContext(run: any, now = new Date(), root?: string): strin
       : `ended ${run.status === 'partial' ? 'PARTIAL: its done-checks were still failing' : run.status}`;
   const lines = [
     `ArcRoom: ${whose} in this project (${ago(run.started_at, now)}, on ${run.machine ?? 'another machine'}${run.branch ? `, branch ${run.branch}` : ''}) ${ended}.`,
-    `Asked: "${first.slice(0, 200)}"`,
-    last && last !== first ? `Last asked: "${last.slice(0, 200)}"` : '',
+    // the whole ask as captured (at most 1,000 characters): a cut ask loses its last steps, the ones left to do
+    `Asked: "${first.slice(0, 1000)}"`,
+    last && last !== first ? `Last asked: "${last.slice(0, 1000)}"` : '',
     run.failing_check ? `Still failing: \`${String(run.failing_check).slice(0, 200)}\`` : '',
     edited.length ? `Edited: ${edited.slice(0, 10).join(', ')}${edited.length > 10 ? ` (+${edited.length - 10} more)` : ''}` : '',
-    `${r.tool_calls ?? 0} tool calls` +
-      (r.blocked ? `, ${r.blocked} blocked by the loop guard` : '') +
-      (memory.find ? `, memory: ${memory.find} lookups, ${memory.complete ?? 0} stored` : ''),
+    // a run that never closed has no report: no count rather than a wrong "0 tool calls"
+    r.tool_calls == null
+      ? ''
+      : `${r.tool_calls} tool calls` +
+        (r.blocked ? `, ${r.blocked} blocked by the loop guard` : '') +
+        (memory.find ? `, memory: ${memory.find} lookups, ${memory.complete ?? 0} stored` : ''),
     'Use this to pick up where it left off if the user continues that work; ignore it otherwise.',
   ];
   return lines.filter(Boolean).join('\n');
