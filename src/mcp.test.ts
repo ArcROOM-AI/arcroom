@@ -102,6 +102,22 @@ test('fileDeps hashes project files; staleFiles reports the ones that changed or
   rmSync(dir, { recursive: true });
 });
 
+test('fileDeps takes a folder as the files in it, so complete_task never fails on "feedback/"', async () => {
+  const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'arcroom-deps-'));
+  mkdirSync(join(dir, 'feedback', 'old'), { recursive: true });
+  writeFileSync(join(dir, 'feedback', '01.txt'), 'late');
+  writeFileSync(join(dir, 'feedback', 'old', '02.txt'), 'crash');
+  const deps = fileDeps(['feedback'], dir);
+  assert.deepEqual(Object.keys(deps).sort(), ['file:feedback/01.txt', 'file:feedback/old/02.txt']);
+  assert.deepEqual(staleFiles(deps, dir), []);
+  writeFileSync(join(dir, 'feedback', '01.txt'), 'on time');
+  assert.deepEqual(staleFiles(deps, dir), ['feedback/01.txt']);
+  rmSync(dir, { recursive: true });
+});
+
 test('find_task evicts a reused answer whose files changed, then looks up again', async () => {
   const seen: [string, any][] = [];
   const call = async (path: string, body: any) => {
