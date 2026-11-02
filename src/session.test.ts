@@ -64,4 +64,12 @@ test('a session that never closed: unfinished, with the files it edited', () => 
   const note = lastRunContext({ started_at: '2026-10-25T11:00:00Z', status: 'running', mine: true, prompt: 'migrate the db', edited: ['/repo/db/migrate.ts', '/repo/db/migrate.ts'] }, now, '/repo');
   assert.match(note, /never closed \(it stopped mid-way\): treat its work as unfinished/);
   assert.match(note, /Edited: db\/migrate\.ts\n/);
+  assert.doesNotMatch(note, /tool calls/);
+});
+
+test('a long ask is handed over whole, so its last steps are not lost', () => {
+  const ask = `Go through every email. 1) ${'tag each one. '.repeat(20)}3) In replies/, draft a reply to each angry customer.`;
+  const note = lastRunContext({ started_at: '2026-10-25T11:00:00Z', status: 'running', prompt: ask }, now);
+  assert.ok(ask.length > 200);
+  assert.match(note, /3\) In replies\/, draft a reply to each angry customer\."/);
 });
