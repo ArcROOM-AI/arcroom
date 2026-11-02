@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { projectOf } from './git.js';
 import { fileDeps, handle, sessionCache, staleFiles } from './mcp.js';
 
 const ctx = { claimant: 'host:1', branch: 'feature-x', cwd: process.cwd() };
@@ -42,6 +43,19 @@ test('tool calls go to the right API path with claimant and branch added', async
   assert.equal(seen[0][1].intent, 'x: y');
   assert.equal(seen[0][1].claimant, 'host:1');
   assert.equal(seen[0][1].branch, 'feature-x');
+});
+
+test('remember sends the project it was saved in, and a fact can name what it replaces', async () => {
+  const { seen, call } = recorder();
+  const replaces = '8f3a1c2e-1b4d-4e6f-9a0b-c1d2e3f4a5b1';
+  await handle('tools/call', { name: 'remember', arguments: { kind: 'fact', text: 'the API runs on port 9000', replaces } }, call, ctx);
+  assert.equal(seen[0][0], '/v1/memory/remember');
+  assert.equal(seen[0][1].project, projectOf(ctx.cwd)); // the same id recall sends as inputs.repo
+  assert.equal(seen[0][1].replaces, replaces);
+  await handle('tools/call', { name: 'claim_task', arguments: { intent: 'x: y' } }, call, ctx);
+  assert.equal(seen[1][1].project, undefined); // only memories carry it
+  const remember = ((await handle('tools/list', {}, noCall, ctx)) as any).tools.find((t: any) => t.name === 'remember');
+  assert.match(remember.inputSchema.properties.replaces.description, /earlier fact or decision/);
 });
 
 test('pins default to the current branch; for "me" pins for the user', async () => {

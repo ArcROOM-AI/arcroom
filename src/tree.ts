@@ -1,8 +1,7 @@
-import { git as runGit } from './git.js';
+import { gitRoot, projectOf, git as runGit } from './git.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { branchKey, type CodeSetup, hashKey, nodeKey, repoKey } from './blind.js';
 import { blobHash } from './fresh.js';
 import { api, ARCROOM_HOME, type Config } from './home.js';
 
@@ -10,6 +9,30 @@ import { api, ARCROOM_HOME, type Config } from './home.js';
 // inside it (`git ls-tree -r -t`), so "same hash" means "nothing changed". Uncommitted edits get their own hash and
 // their folders a trailing *. The default branch sends its whole tree once, then only what changed; any other branch
 // sends only the folders and files that differ from where it left the default branch.
+
+export type CodeSetup = { root: string; mode: 'off' | 'standard' };
+
+/** The repo's Code wing setup: off when its committed .arcroom.json says "code": "off", standard otherwise. */
+export function codeSetup(cwd: string): CodeSetup | undefined {
+  const root = cwd ? gitRoot(cwd) : undefined;
+  if (!root) return undefined;
+  // Blind mode is gone: a repo whose .arcroom.json still says "code": "blind" is read as standard, so it keeps syncing
+  return { root, mode: readSetup(root).code === 'off' ? 'off' : 'standard' };
+}
+export function readSetup(root: string): Record<string, any> {
+  try {
+    return JSON.parse(readFileSync(join(root, '.arcroom.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+export function writeSetup(root: string, patch: Record<string, unknown>): void {
+  const next = { ...readSetup(root), ...patch };
+  for (const [k, v] of Object.entries(next)) if (v === undefined) delete next[k];
+  writeFileSync(join(root, '.arcroom.json'), JSON.stringify(next, null, 2) + '\n');
+}
+/** The repo id as the Room knows it: the git remote. */
+export const repoKey = (s: CodeSetup) => projectOf(s.root);
 
 export type Entry = { kind: 'dir' | 'file'; hash: string };
 export type Tree = Map<string, Entry>; // repo path ("." for the root) → kind and hash
@@ -112,12 +135,11 @@ export function syncBody(s: CodeSetup, tree: Tree, b: Branches, last: Record<str
   for (const p of keep) {
     const e = tree.get(p);
     if (!e) continue;
-    const k = nodeKey(s, p);
-    const h = hashKey(s, e.hash);
-    sent[k] = h;
-    if (onDefault && last && !reset && last[k] === h) continue;
+    const h = e.hash;
+    sent[p] = h;
+    if (onDefault && last && !reset && last[p] === h) continue;
     const parent = parentOf(p);
-    nodes.push({ k, ...(parent ? { p: nodeKey(s, parent) } : {}), kind: e.kind, h });
+    nodes.push({ k: p, ...(parent ? { p: parent } : {}), kind: e.kind, h });
   }
   const full = !onDefault || !last || reset;
   const deleted = full ? [] : Object.keys(last!).filter((k) => !(k in sent));
@@ -126,12 +148,11 @@ export function syncBody(s: CodeSetup, tree: Tree, b: Branches, last: Record<str
     body: {
       repo: repoKey(s),
       mode: s.mode,
-      ...(s.mode === 'blind' ? { fingerprint: s.keys!.fp } : {}),
-      branch: branchKey(s, b.branch),
-      default_branch: branchKey(s, b.def),
+      branch: b.branch,
+      default_branch: b.def,
       ahead: b.ahead,
-      branches: b.all.map((x) => branchKey(s, x)),
-      merged: b.merged.map((x) => branchKey(s, x)),
+      branches: b.all,
+      merged: b.merged,
       full,
       ...(reset ? { reset: true } : {}),
       nodes,
@@ -140,12 +161,13 @@ export function syncBody(s: CodeSetup, tree: Tree, b: Branches, last: Record<str
   };
 }
 
+// the empty field once held a key fingerprint; kept so the cache names (and what was sent) carry over
 const cacheFile = (s: CodeSetup, branch: string) =>
-  join(ARCROOM_HOME, 'tree', `${createHash('sha1').update(`${s.root}|${s.mode}|${s.fp ?? ''}|${branch}`).digest('hex').slice(0, 16)}.json`);
+  join(ARCROOM_HOME, 'tree', `${createHash('sha1').update(`${s.root}|${s.mode}||${branch}`).digest('hex').slice(0, 16)}.json`);
 
-/** Sends this checkout's tree to the Room. Off, or Blind without the key: nothing is sent. */
+/** Sends this checkout's tree to the Room. Off: nothing is sent. */
 export async function syncTree(cfg: Config, s: CodeSetup, reset = false): Promise<any> {
-  if (s.mode === 'off' || (s.mode === 'blind' && !s.keys)) return undefined;
+  if (s.mode === 'off') return undefined;
   const tree = readTree(s.root);
   const b = branches(s.root);
   const file = cacheFile(s, b.branch);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.5-beta
+
+- Team facts and decisions belong to the repo they were saved in, so they are handed out there and not in every repo.
+- Each line in ArcRoom team knowledge starts with its memo id, so an agent can say what a new fact or decision replaces; a fact can now replace a fact.
+- A save that ArcRoom refuses (the same words were replaced or reported wrong before) says why and is not retried.
+- `arcroom wrong` says what happened in plain words (steps broken, which older steps take over, answer thrown away) and names a playbook by its title.
+- ArcRoom never reads or writes CLAUDE.md or AGENTS.md, and a test proves it.
+- Blind mode is removed. A repo whose `.arcroom.json` says `"code": "blind"` now syncs in standard mode.
+
 ## 0.0.4-beta
 
 - Privacy: a path to a secret file (`.env`, keys) or a command naming one is sent only as `[secret file]`; a password written in words ("my password is …") is redacted; events queued for a repo you switched off are never sent.

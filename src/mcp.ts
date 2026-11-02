@@ -1,6 +1,6 @@
 // `arcroom mcp`: an MCP server over stdio (newline-delimited JSON-RPC 2.0) that Claude Code starts per session.
 // Hand-rolled instead of the SDK so it runs from the copied runtime with no node_modules.
-import { git } from './git.js';
+import { git, projectOf } from './git.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
@@ -157,8 +157,10 @@ export const TOOLS = [
       "a fact about this project ('we use pnpm, never npm', 'the API runs on port 8787') or a decision and its reason " +
       "('chose Postgres over SQLite: we need concurrent writers'). Not for task results (complete_task) or code changes " +
       '(recorded automatically). Keep text to one sentence; files = paths it is about. For a decision, also pass what was ' +
-      'weighed (options), the situation (context), who decided, where (source: the PR, issue or thread) and, when it ' +
-      'overturns an earlier decision, that decision\'s memo id (replaces).',
+      'weighed (options), the situation (context), who decided and where (source: the PR, issue or thread). When it ' +
+      "replaces an earlier fact or decision, pass that one's memo id (replaces: the [id ...] on its line in ArcRoom team " +
+      'knowledge). saved: false = not saved again: already saved, or replaced or reported wrong before (its note says ' +
+      'why; with replaced_by, save again with replaces = that id to bring these words back). Do not retry otherwise.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -174,7 +176,7 @@ export const TOOLS = [
           description: 'Decision: where it was decided.',
           properties: { kind: { type: 'string', enum: ['pr', 'issue', 'thread', 'doc', 'commit', 'chat', 'other'] }, url: { type: 'string' }, title: { type: 'string' } },
         },
-        replaces: { type: 'string', description: 'Decision: memo id of the earlier decision this one overturns.' },
+        replaces: { type: 'string', description: 'Memo id of the earlier fact or decision this one replaces.' },
       },
       required: ['kind', 'text'],
     },
@@ -311,6 +313,8 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         }
       }
       const body: Record<string, unknown> = { ...args, claimant: ctx.claimant, branch: ctx.branch, ...(pinFor === 'me' ? { scope: 'user' } : { scope: 'branch' }) };
+      // a fact or decision belongs to the repo it was saved in: the same project id run.start and recall send
+      if (params.name === 'remember') body.project = projectOf(ctx.cwd);
       if (Array.isArray(depends_on_files)) body.depends_on = fileDeps(depends_on_files, ctx.cwd);
       if (Array.isArray(args.files)) body.files = args.files.map((p: string) => relative(ctx.cwd, resolve(ctx.cwd, p)).replaceAll('\\', '/'));
       try {

@@ -159,7 +159,7 @@ export async function hook(): Promise<void> {
       // (steps or answer, playbook, each fact and decision), so it can name the one that was wrong
       const handed = [
         ...(pointer ? [{ memo_id: pointer.memoId, kind: pointer.kind, text: pointer.intent }] : []),
-        ...(playbook ? [{ memo_id: playbook.memoId, kind: 'playbook', text: 'playbook' }] : []),
+        ...(playbook ? [{ memo_id: playbook.memoId, kind: 'playbook', text: playbook.intent ?? 'playbook' }] : []),
         ...(knowledge ? knowledge.items.map((i) => ({ memo_id: i.id, kind: i.kind, text: i.text })) : []),
       ];
       if (handed.length) writeFileSync(join(ARCROOM_HOME, 'last-recall.json'), JSON.stringify({ memo_id: handed[0].memo_id, intent: handed[0].text, handed }));

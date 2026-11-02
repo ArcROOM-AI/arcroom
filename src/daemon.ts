@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blindEvent, type CodeSetup, codeSetup, repoKey, repoPath } from './blind.js';
+import { repoPath } from './git.js';
 import { prefetchCode } from './code.js';
 import { EDIT_TOOLS } from './done.js';
 import { api, ARCROOM_HOME, isOff, keyRefused, loadConfig, offRepos, type Config } from './home.js';
@@ -9,7 +9,7 @@ import { serveLookups } from './lookup.js';
 import { sendLater } from './pending.js';
 import { logSent } from './sent.js';
 import { redact, rememberSecrets } from './redact.js';
-import { branches, syncTree } from './tree.js';
+import { branches, type CodeSetup, codeSetup, repoKey, syncTree } from './tree.js';
 
 const SPOOL = join(ARCROOM_HOME, 'spool.jsonl');
 const SENDING = join(ARCROOM_HOME, 'spool.sending.jsonl');
@@ -121,7 +121,7 @@ async function drainOnce(def: Config): Promise<number> {
   return events.length;
 }
 
-// Code wing (Standard): which repo, branch and folder an edit is in, cached per folder for a minute.
+// Code wing: which repo, branch and folder an edit is in, cached per folder for a minute.
 const setups = new Map<string, { s: CodeSetup | undefined; branch: string; at: number }>();
 function setupFor(cwd: string) {
   const hit = setups.get(cwd);
@@ -141,12 +141,11 @@ export function codeTag(e: Record<string, any>, s: CodeSetup | undefined, branch
   const dir = node.includes('/') ? node.slice(0, node.lastIndexOf('/')) : '.';
   return { ...e, data: { ...e.data, code: { repo: repoKey(s), branch, node, dir, agent: e.data.agent ?? 'claude' } } };
 }
-/** Each event as it may leave this laptop: a Blind repo's with paths scrambled and contents dropped, an edit tagged. */
+/** Each event as it leaves this laptop: an edit tagged with where it is. */
 export function withCode(e: Record<string, any>, setup: (cwd: string) => { s: CodeSetup | undefined; branch: string } = setupFor) {
-  if (typeof e.cwd !== 'string') return e;
+  if (typeof e.cwd !== 'string' || e.type !== 'tool.start') return e;
   const { s, branch } = setup(e.cwd);
-  if (s?.mode === 'blind') return blindEvent(e, s);
-  return e.type === 'tool.start' ? codeTag(e, s, branch) : e;
+  return codeTag(e, s, branch);
 }
 
 const lastSync = new Map<string, number>();

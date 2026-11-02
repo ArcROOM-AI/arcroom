@@ -23,3 +23,12 @@ test('a save that could not reach the API is sent later; still offline it waits;
   assert.deepEqual(seen, ['/v1/memory/remember', '/v1/tasks/complete']);
   assert.deepEqual(await sendLater(back), { sent: 0, dropped: [] }); // nothing left
 });
+
+test('a kept remember the API answers with saved: false (replaced or reported wrong meanwhile) is done, never sent again', async () => {
+  keepForLater('/v1/memory/remember', { kind: 'fact', text: 'the API runs on port 8787' }, '/repo');
+  let calls = 0;
+  const refused = async () => (calls++, { saved: false, memo_id: 'm', replaced_by: { id: 'b', title: 'the API runs on port 9000' } });
+  assert.deepEqual(await sendLater(refused), { sent: 1, dropped: [] });
+  assert.deepEqual(await sendLater(refused), { sent: 0, dropped: [] });
+  assert.equal(calls, 1);
+});

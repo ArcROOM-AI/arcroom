@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { signFor, statusText, toolResult } from './signs.js';
+import { signFor, statusText, toolResult, wrongNote } from './signs.js';
 
 test('reads the JSON out of an MCP tool response, or the ArcRoom error', () => {
   const blocks = [{ type: 'text', text: '{"match":"reuse"}' }];
@@ -37,4 +37,14 @@ test('status line shows live plus only the counters that moved', () => {
 test('split line says how many parts are already done', () => {
   const r = { parts: [{}, {}, {}], counts: { reuse: 2, none: 1 } };
   assert.equal(signFor('split_task', {}, r)?.message, 'ArcRoom · split into 3 parts: 2 already done, 1 new');
+});
+
+test('arcroom wrong says what the report did, from the same reply the website reads', () => {
+  const steps = { reports: 1, deleted: false, steps_broken: true, broken_version: 3, answer_thrown_away: false };
+  assert.equal(wrongNote({ ...steps, fallback_version: 2 }), 'steps broken, steps v2 take over');
+  assert.equal(wrongNote({ ...steps, fallback_version: null }), 'steps broken, the next run plans again');
+  assert.equal(wrongNote({ ...steps, fallback_version: null, answer_thrown_away: true }), 'steps broken, the next run plans again, answer thrown away');
+  assert.equal(wrongNote({ reports: 1, deleted: false, steps_broken: false, answer_thrown_away: true }), 'answer thrown away');
+  assert.equal(wrongNote({ reports: 1, deleted: false, steps_broken: false, answer_thrown_away: false }), 'noted (1 of 2 reports delete it)');
+  assert.equal(wrongNote({ ...steps, reports: 2, deleted: true }), 'deleted (2 people said wrong)');
 });

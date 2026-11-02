@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { git } from './git.js';
 import { AFTER_TOOLS, keepOutOfGit, withArcroomHooks } from './init.js';
 
@@ -42,4 +43,34 @@ test('files init wrote that git does not track are kept out of commits in this c
   assert.deepEqual(keepOutOfGit(files, repo), []); // a second init adds nothing
   assert.match(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8'), /^\/\.cursor\/mcp\.json$/m);
   assert.equal(git(['status', '--porcelain'], { cwd: repo }).stdout?.includes('.cursor'), false);
+});
+
+// CLAUDE.md and AGENTS.md hold the team's rules and stay their only owner: ArcRoom never imports, rewrites or hides them,
+// so no line of them turns into a fact, a how-to or a playbook (init() itself needs the API, so its repo step is run here)
+test('init leaves CLAUDE.md and AGENTS.md byte for byte as they were, and in plain sight of git', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arcroom-mdfiles-'));
+  git(['init', '-q'], { cwd: repo });
+  writeFileSync(join(repo, 'CLAUDE.md'), '# Rules\r\n- use pnpm, never npm\r\n');
+  writeFileSync(join(repo, 'AGENTS.md'), '# Agents\n- run the tests before you stop\n');
+  git(['add', 'CLAUDE.md'], { cwd: repo }); // one the team commits, one it keeps local
+  const before = ['CLAUDE.md', 'AGENTS.md'].map((f) => readFileSync(join(repo, f)));
+  mkdirSync(join(repo, '.claude'));
+  for (const f of [join('.claude', 'settings.local.json'), '.mcp.json']) writeFileSync(join(repo, f), '{}');
+  keepOutOfGit([join(repo, '.claude', 'settings.local.json'), join(repo, '.mcp.json')], repo);
+  ['CLAUDE.md', 'AGENTS.md'].forEach((f, i) => assert.ok(readFileSync(join(repo, f)).equals(before[i]), `${f} changed`));
+  assert.doesNotMatch(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8'), /\.md$/m);
+  assert.equal(git(['diff', '--name-only'], { cwd: repo }).stdout, '');
+  assert.match(git(['status', '--porcelain'], { cwd: repo }).stdout ?? '', /^\?\? AGENTS\.md$/m);
+});
+
+test('no plugin code reads or writes CLAUDE.md or AGENTS.md (tests and comments may name them)', () => {
+  const src = fileURLToPath(new URL('../src/', import.meta.url)); // the tests run from dist/
+  const code = readdirSync(src)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+    .map((f) => [f, readFileSync(join(src, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')] as const);
+  assert.ok(code.length > 20);
+  for (const [f, text] of code) {
+    assert.doesNotMatch(text, /\b(CLAUDE|AGENTS)\.md\b/i, f);
+    assert.doesNotMatch(text, /(write|append)\w*\([^)]*\.md\b/i, f);
+  }
 });
