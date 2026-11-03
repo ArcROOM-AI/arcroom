@@ -1,0 +1,11 @@
+{
+  "description": "ArcRoom: records each session into the team's memory room and hands over what earlier runs learned",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin", "timeout": 120 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin" }] }],
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin" }] }],
+    "PostToolUse": [{ "matcher": "Bash|PowerShell|mcp__plugin_arcroom_arcroom__.*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" hook --plugin" }] }]
+  }
+}

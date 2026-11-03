@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { type Agent, AGENTS, fromAgent, toAgent } from './agents.js';
 import { ensureDaemon } from './daemon.js';
 import { EDIT_TOOLS, noteEdit, onStop, SHELL_TOOLS } from './done.js';
-import { toArcroomEvent } from './events.js';
+import { OUR_TOOL, TOOL_PREFIX, toArcroomEvent } from './events.js';
 import { editClash, noteDir } from './code.js';
 import { fence } from './fence.js';
 import { redact, rememberSecrets } from './redact.js';
@@ -13,7 +13,7 @@ import { type Lookup, lookupFast } from './lookup.js';
 import { checkLoop, sessionFile } from './loop.js';
 import { type Kind, pack, type Piece } from './pack.js';
 import { lastRunNote, projectOf } from './session.js';
-import { laptopHookActs } from './scope.js';
+import { laptopHookActs, pluginHookActs } from './scope.js';
 import { bump, MARK, signFor, toolResult } from './signs.js';
 import { costSinceClaim, markClaim, turnUsage } from './usage.js';
 
@@ -31,11 +31,10 @@ import { costSinceClaim, markClaim, turnUsage } from './usage.js';
 // Code changes are recorded from the trace by the hooks, so the agent is told not to save them by hand:
 // find/claim/complete on a code change only added calls (and duplicate step versions) in the benchmark.
 const REMINDER =
-  'ArcRoom team memory is on and records code changes by itself: for those, do not call the mcp__arcroom__ tools. ' +
-  'For a question, lookup or analysis someone could reuse, call mcp__arcroom__find_task first (reuse: answer from it; ' +
+  `ArcRoom team memory is on and records code changes by itself: for those, do not call the ${TOOL_PREFIX} tools. ` +
+  `For a question, lookup or analysis someone could reuse, call ${TOOL_PREFIX}find_task first (reuse: answer from it; ` +
   'none: claim_task, do it, complete_task with the answer). A request with several parts: split_task. ' +
-  'Learned something lasting (a fact about this project, or a decision and why)? Save it with mcp__arcroom__remember.';
-const OUR_TOOLS = 'mcp__arcroom__';
+  `Learned something lasting (a fact about this project, or a decision and why)? Save it with ${TOOL_PREFIX}remember.`;
 
 export async function hook(): Promise<void> {
   try {
@@ -47,6 +46,13 @@ export async function hook(): Promise<void> {
     const raw = fromAgent(JSON.parse(input), agent);
     if (isOff(raw.cwd)) return; // switched off for this repo by this person (arcroom off): nothing recorded or sent
     if (process.argv.includes('--user') && !laptopHookActs(raw.cwd)) return; // laptop-wide hook: only set-up repos, never twice
+    if (process.argv.includes('--plugin') && !pluginHookActs(raw.cwd)) return; // init's hooks already record here
+    if (!loadConfig(raw.cwd).apiKey) {
+      // the plugin installs without a key: nothing is recorded until one is saved, said once, at session start
+      if (raw.hook_event_name === 'SessionStart')
+        process.stdout.write(JSON.stringify(toAgent(agent, 'SessionStart', { systemMessage: `${MARK} · not connected yet: run npx arcroom login in a terminal (key from arcroomai.com, Settings → API keys), then start a new session.` }, String(raw.session_id))));
+      return;
+    }
     if (keyRefused(loadConfig(raw.cwd))) {
       // the key was revoked or its account deleted: nothing runs until a new key (arcroom init); said once, at session start
       if (raw.hook_event_name === 'SessionStart')
@@ -189,7 +195,7 @@ export async function hook(): Promise<void> {
         queue(blocked);
         out.hookSpecificOutput = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason };
         injected('deny', reason);
-        say(`${MARK} · blocked a repeated ${String(raw.tool_name).replace(OUR_TOOLS, '')} call (same input 3 times in a row)`);
+        say(`${MARK} · blocked a repeated ${String(raw.tool_name).replace(OUR_TOOL, '')} call (same input 3 times in a row)`);
         bump(session, 'blocked');
       } else {
         // two agents on one file: the first edit waits once, with who is on it (the same edit again goes through)
@@ -207,8 +213,8 @@ export async function hook(): Promise<void> {
     // a done-check the agent ran with Bash (the Stop hook asks for them; it never runs them itself)
     if (name === 'PostToolUse' && SHELL_TOOLS.has(raw.tool_name)) noteEdit(raw);
 
-    if (name === 'PostToolUse' && String(raw.tool_name).startsWith(OUR_TOOLS)) {
-      const tool = raw.tool_name.slice(OUR_TOOLS.length);
+    if (name === 'PostToolUse' && OUR_TOOL.test(String(raw.tool_name))) {
+      const tool = raw.tool_name.replace(OUR_TOOL, '');
       const result = toolResult(raw.tool_response);
       const sign = signFor(tool, raw.tool_input, result);
       if (sign) {

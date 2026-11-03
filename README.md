@@ -19,6 +19,15 @@ npx arcroom init --agent codex     # or cursor, opencode (experimental)
 
 `init` copies the plugin to `~/.arcroom/runtime` and adds its hooks and MCP server to the agent's settings. Nothing else needs to run.
 
+Or, in Claude Code, install it as a plugin (on in every project, nothing written into them):
+
+```
+/plugin marketplace add ArcROOM-AI/arcroom
+/plugin install arcroom@arcroom
+```
+
+then, once, in a terminal: `npx arcroom login` (paste the key). Where `init` already set up a project, the plugin steps aside there so nothing is recorded twice.
+
 ## What leaves your laptop
 
 Prompts (system reminders removed, secrets redacted, first 1,000 characters), file paths, search patterns, shell commands (first 1,000 characters), URLs and web queries, done-check results, git hashes of the files a turn touched, token counts, and what an agent saves on purpose with ArcRoom's tools. **Never file contents, tool output or edit diffs.** A path to a secret file (`.env`, keys), or a command that names one, leaves only as `[secret file]`.
@@ -34,6 +43,7 @@ Hooks never block a session. Memory lookup gives up after 3 seconds, the prompt 
 | Command | What it does |
 | --- | --- |
 | `arcroom init [--agent claude\|codex\|cursor\|opencode] [--project <id>]` | set up this machine and project |
+| `arcroom login` | save and check the key only (for the Claude Code plugin) |
 | `arcroom whoami` | who the key belongs to |
 | `arcroom doctor` | checks the key, the API, the hooks in this folder and the uploader, and prints the fix for each problem |
 | `arcroom off` / `arcroom on` | stop or restart ArcRoom for this repo |

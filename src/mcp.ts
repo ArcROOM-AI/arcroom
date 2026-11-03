@@ -297,7 +297,7 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         serverInfo: { name: 'arcroom', title: 'ArcRoom', version: '0.0.0', websiteUrl: 'https://arcroomai.com', icons: ICONS },
         instructions: isOff(ctx.cwd)
           ? 'ArcRoom is switched off for this repo (arcroom off): its tools do nothing here.'
-          : !hooksHere(ctx.cwd)
+          : !process.argv.includes('--plugin') && !hooksHere(ctx.cwd) // the plugin brings its own hooks
           ? 'No ArcRoom hooks run for this client, so nothing is recorded on its own. Check find_task before a task, a question, a lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task with what you did, including code changes, when you finish one. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note.'
           : 'Code changes are recorded automatically from the session; do not call these tools for them. Check find_task before a question, lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task when you do one yourself. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note. Run a part that has route.model with the Agent tool on that model.',
       };
@@ -388,7 +388,12 @@ function keptLater(path: string, body: object, cwd: string) {
 
 export async function mcp(): Promise<void> {
   const cfg = loadConfig(process.cwd()); // one MCP process per session, started in its project
-  const call: Call = sessionCache((path, body) => api(cfg, path, body, path === PATHS.find_task ? FIND_DEADLINE_MS : 10_000));
+  const call: Call = sessionCache((path, body) =>
+    // the Claude Code plugin starts this server before any key is saved
+    cfg.apiKey
+      ? api(cfg, path, body, path === PATHS.find_task ? FIND_DEADLINE_MS : 10_000)
+      : Promise.reject(new Error('ArcRoom is not connected on this laptop yet: run npx arcroom login in a terminal (key from arcroomai.com, Settings → API keys).')),
+  );
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout?.trim() || null;
   const ctx = { claimant: `${hostname()}:${process.pid}`, branch, cwd: process.cwd() }; // one MCP process per Claude session
 
