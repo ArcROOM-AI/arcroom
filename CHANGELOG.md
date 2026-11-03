@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.7-beta
+
+- Install ArcRoom as a Claude Code plugin: `/plugin marketplace add ArcROOM-AI/arcroom`, then `/plugin install arcroom@arcroom`. It is on in every project with nothing written into them, and steps aside where `arcroom init` already set a project up.
+- `arcroom login` saves and checks the key without touching the project. Until there is a key, the plugin records nothing and says so once when a session starts.
+
 ## 0.0.6-beta
 
 - Hand-overs carry the whole ask (up to 1,000 characters), not its first 200, so a session stopped mid-job no longer loses the steps that were left to do. A session that never closed no longer shows a wrong "0 tool calls".
