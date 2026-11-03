@@ -8,7 +8,7 @@ import { codeSetup, repoKey, syncTree, writeSetup } from './tree.js';
 import { gitRoot, projectOf } from './git.js';
 import { api, ARCROOM_HOME, loadConfig, setOff } from './home.js';
 import { hook } from './hook.js';
-import { init, uninstall } from './init.js';
+import { init, installRuntime, login, uninstall } from './init.js';
 import { sentReport } from './sent.js';
 import { mcp } from './mcp.js';
 import { readStats, statusText, wrongNote } from './signs.js';
@@ -24,6 +24,8 @@ if (!['hook', 'daemon', 'mcp', 'status'].includes(cmd))
   });
 
 if (cmd === 'init') await init(args);
+else if (cmd === 'login') await login(args);
+else if (cmd === 'runtime') installRuntime(); // the Claude Code plugin's launcher fetches this version into ~/.arcroom/runtime
 else if (cmd === 'hook') await hook();
 else if (cmd === 'daemon') await daemon();
 else if (cmd === 'mcp') await mcp();

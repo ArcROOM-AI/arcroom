@@ -297,7 +297,7 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         serverInfo: { name: 'arcroom', title: 'ArcRoom', version: '0.0.0', websiteUrl: 'https://arcroomai.com', icons: ICONS },
         instructions: isOff(ctx.cwd)
           ? 'ArcRoom is switched off for this repo (arcroom off): its tools do nothing here.'
-          : !hooksHere(ctx.cwd)
+          : !process.argv.includes('--plugin') && !hooksHere(ctx.cwd) // the plugin brings its own hooks
           ? 'No ArcRoom hooks run for this client, so nothing is recorded on its own. Check find_task before a task, a question, a lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task with what you did, including code changes, when you finish one. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note.'
           : 'Code changes are recorded automatically from the session; do not call these tools for them. Check find_task before a question, lookup or analysis someone could reuse (split_task when a request has several parts); claim_task, then complete_task when you do one yourself. Save a lasting fact or decision with remember; after you understand a folder, save one line about it with code_note. Run a part that has route.model with the Agent tool on that model.',
       };
@@ -308,6 +308,8 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
     case 'tools/call': {
       const path = PATHS[params?.name];
       if (!path) throw { code: -32602, message: `unknown tool ${params?.name}` };
+      if (!loadConfig(ctx.cwd).apiKey)
+        return { content: [{ type: 'text', text: 'ArcRoom is not connected on this laptop yet: run npx arcroom login in a terminal (key from arcroomai.com, Settings → API keys).' }], isError: true };
       if (keyRefused(loadConfig(ctx.cwd)))
         return { content: [{ type: 'text', text: 'ArcRoom is stopped on this machine: its key was revoked or its account deleted. Run arcroom init with a new key.' }], isError: true };
       if (isOff(ctx.cwd)) return { content: [{ type: 'text', text: 'ArcRoom is switched off for this repo (arcroom on to use it again).' }], isError: true };

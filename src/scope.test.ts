@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 process.env.ARCROOM_HOME = mkdtempSync(join(tmpdir(), 'arcroom-scope-home-'));
 const { git, projectOf } = await import('./git.js');
-const { laptopHookActs, projectHooksAbove, setUpHere } = await import('./scope.js');
+const { laptopHookActs, pluginHookActs, projectHooksAbove, setUpHere } = await import('./scope.js');
 
 test('laptop-wide hooks act only in set-up repos, and step aside where project hooks already run', () => {
   const clone = mkdtempSync(join(tmpdir(), 'arcroom-clone-'));
@@ -19,10 +19,12 @@ test('laptop-wide hooks act only in set-up repos, and step aside where project h
   assert.equal(setUpHere(clone), true);
   assert.equal(laptopHookActs(clone), true); // a second clone of a set-up repo: covered
   assert.equal(laptopHookActs(other), false); // never set up: not traced
+  assert.equal(pluginHookActs(other), true); // the Claude Code plugin needs no init: it records everywhere
   const sub = join(clone, 'packages', 'web');
   mkdirSync(join(clone, '.claude'), { recursive: true });
   mkdirSync(sub, { recursive: true });
   writeFileSync(join(clone, '.claude', 'settings.local.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: 'node "C:/u/.arcroom/runtime/index.js" hook' }] }] } }));
   assert.equal(projectHooksAbove(sub), true);
   assert.equal(laptopHookActs(sub), false); // the project's own hooks run here: not twice
+  assert.equal(pluginHookActs(sub), false); // nor the plugin's
 });

@@ -25,7 +25,10 @@ export function clip(value: unknown): unknown {
 // Metadata only: a tool call leaves the laptop as its paths, patterns, command, URL or query, never what it read,
 // wrote or printed (file contents, edits, sub-agent prompts, tool output). Steps, run reports and the feed read
 // only these keys. ArcRoom's own tools keep their input and output: both go to and come from the ArcRoom API anyway.
-const OURS = 'mcp__arcroom__';
+// mcp__arcroom__<name> as init registers them, mcp__plugin_arcroom_arcroom__<name> from the Claude Code plugin
+export const OUR_TOOL = /^mcp__(?:plugin_arcroom_)?arcroom__/;
+/** The prefix the agent sees on ArcRoom's tools in this session (the plugin's hooks run with --plugin). */
+export const TOOL_PREFIX = process.argv.includes('--plugin') ? 'mcp__plugin_arcroom_arcroom__' : 'mcp__arcroom__';
 const KEEP = ['file_path', 'notebook_path', 'path', 'pattern', 'command', 'url', 'query', 'description'];
 const SHORT = 1000; // prompts and commands; the server reads the first 300 (prompt) and 200 (command) chars
 // redacted before the cut, so a secret the cut splits is still found
@@ -54,13 +57,13 @@ export function toArcroomEvent(raw: Record<string, any>, at = new Date()): Arcro
     case 'UserPromptSubmit':
       return { ...base, type: 'prompt', data: { prompt: typed(raw.prompt) } };
     case 'PreToolUse': {
-      const ours = String(raw.tool_name).startsWith(OURS);
+      const ours = OUR_TOOL.test(String(raw.tool_name));
       // a call made inside a subagent says which one, so its steps are not read as the main agent's
       const subagent = raw.agent_id ? { subagent: String(raw.agent_type ?? raw.agent_id).slice(0, 80) } : {};
       return { ...base, type: 'tool.start', data: { id: raw.tool_use_id, tool: raw.tool_name, input: clip(ours ? raw.tool_input : metadata(raw.tool_input)), ...subagent } };
     }
     case 'PostToolUse':
-      return { ...base, type: 'tool.end', data: { id: raw.tool_use_id, tool: raw.tool_name, ...(String(raw.tool_name).startsWith(OURS) ? { output: clip(raw.tool_response) } : {}) } };
+      return { ...base, type: 'tool.end', data: { id: raw.tool_use_id, tool: raw.tool_name, ...(OUR_TOOL.test(String(raw.tool_name)) ? { output: clip(raw.tool_response) } : {}) } };
     case 'Stop':
       return { ...base, type: 'turn.end', data: {} };
     case 'SessionEnd':

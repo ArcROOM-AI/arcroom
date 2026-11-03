@@ -51,3 +51,6 @@ export const laptopWide = (cwd: string) => setUpHere(cwd) && ours(userSettings()
 
 /** Some agent's hooks record sessions in this folder (a hook-less MCP client's do not). */
 export const hooksHere = (cwd: string) => AGENT_FILES.some(([, f]) => ours(join(cwd, f))) || laptopWide(cwd);
+
+/** The Claude Code plugin's hook acts here: everywhere, except where init's project or laptop-wide hooks already record. */
+export const pluginHookActs = (cwd: string) => !projectHooksAbove(cwd) && !laptopWide(cwd);

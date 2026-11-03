@@ -1,0 +1,12 @@
+{
+  "name": "arcroom",
+  "owner": { "name": "ArcRoom AI" },
+  "metadata": { "description": "ArcRoom: one shared memory for your AI agents and your team" },
+  "plugins": [
+    {
+      "name": "arcroom",
+      "source": "./",
+      "description": "Shared memory for Claude Code, Codex and your teammates' agents: past runs, steps that worked, decisions and failures. Fills itself."
+    }
+  ]
+}

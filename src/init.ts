@@ -21,7 +21,7 @@ type Settings = { hooks?: Record<string, HookGroup[]>; [key: string]: unknown };
 
 // After a tool, only a shell run (a done-check passing) and ArcRoom's own tools matter, so Claude Code launches the hook
 // once per tool call instead of twice: each launch is a window flash on Windows (Git Bash, no console of its own).
-export const AFTER_TOOLS = 'Bash|PowerShell|mcp__arcroom__.*';
+export const AFTER_TOOLS = 'Bash|PowerShell|mcp__arcroom__.*|mcp__plugin_arcroom_arcroom__.*';
 
 /** Puts ArcRoom's hook on every event: replaces an earlier ArcRoom entry, keeps everyone else's hooks. */
 export function withArcroomHooks(settings: Settings, command: string, anyTool = '*', afterTool = anyTool): Settings {
@@ -110,16 +110,15 @@ export function keysAfterInit(saved: any, repo: string, key: string, url: string
   return next;
 }
 
-export async function init(args: string[]): Promise<void> {
+const CONFIG_FILE = join(ARCROOM_HOME, 'config.json');
+
+/**
+ * Takes the key (--key, ARCROOM_API_KEY, the saved one, else asks), checks it with the API and returns the laptop's config
+ * with it saved for `repo`: init and login both start here, and the caller writes the file.
+ */
+async function connect(args: string[], repo: string): Promise<any> {
   const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
-  const agent = (arg('--agent') ?? 'claude') as Agent;
-  if (!AGENTS.includes(agent)) {
-    console.error(`--agent takes one of: ${AGENTS.join(', ')}`);
-    process.exit(1);
-  }
-  const configFile = join(ARCROOM_HOME, 'config.json');
-  const saved = existsSync(configFile) ? JSON.parse(readFileSync(configFile, 'utf8')) : {}; // re-running init reuses saved values
-  const repo = projectOf(process.cwd());
+  const saved = existsSync(CONFIG_FILE) ? JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) : {}; // re-running init reuses saved values
   const mine = saved.repos?.[repo]; // this repo's own key, when it has one
   const forRepo = mine ? { ...saved, apiKey: mine.apiKey, workspace: mine.workspace } : saved;
   const choice = initChoice({ argKey: arg('--key'), envKey: process.env.ARCROOM_API_KEY, argUrl: arg('--url'), saved: forRepo });
@@ -144,7 +143,7 @@ export async function init(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // 1. Check the key with the API, then remember it for this machine: a typo or a revoked key must not end in "ArcRoom is on".
+  // check the key with the API: a typo or a revoked key must not end in "ArcRoom is on"
   let workspace: string | undefined = forRepo.apiKey === key ? forRepo.workspace : undefined;
   try {
     const me = await api({ apiKey: key, url }, '/v1/me');
@@ -157,22 +156,56 @@ export async function init(args: string[]): Promise<void> {
     }
     console.error(`Could not check the key (${(e as Error).message}); saved it anyway. Run arcroom doctor once you are online.`);
   }
-  mkdirSync(ARCROOM_HOME, { recursive: true, mode: 0o700 });
-  const cfg = keysAfterInit(saved, repo, key, url, workspace);
-  cfg.setUp = [...new Set([...(cfg.setUp ?? []), repo])]; // laptop-wide hooks (--everywhere) act only in repos set up here
-  writeFileSync(configFile, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  stopDaemon(); // the next hook event starts the updated one
+  return keysAfterInit(saved, repo, key, url, workspace);
+}
 
-  // 2. Copy the hook runtime to a stable place (npx's own copy is temporary).
+const saveConfig = (cfg: any) => {
+  mkdirSync(ARCROOM_HOME, { recursive: true, mode: 0o700 });
+  writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  stopDaemon(); // the next hook event starts the updated one
+};
+
+/**
+ * Copies the hook runtime to a stable place (npx's own copy is temporary) and returns its entry. Its package.json keeps the
+ * npm version, which the Claude Code plugin's launcher (hooks/run.mjs) compares with its own before using it.
+ */
+export function installRuntime(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
   const runtime = join(ARCROOM_HOME, 'runtime');
-  cpSync(dirname(fileURLToPath(import.meta.url)), runtime, {
-    recursive: true,
-    filter: (src) => !src.includes('.test.'),
-  });
-  writeFileSync(join(runtime, 'package.json'), '{ "type": "module" }\n');
+  let version: string | undefined;
+  try {
+    version = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version;
+  } catch {
+    // run from the runtime itself: no npm package.json above it, the launcher fetches again next time
+  }
+  cpSync(here, runtime, { recursive: true, filter: (src) => !src.includes('.test.') });
+  writeFileSync(join(runtime, 'package.json'), JSON.stringify({ type: 'module', ...(version ? { version } : {}) }) + '\n');
+  return join(runtime, 'index.js').replaceAll('\\', '/');
+}
+
+/** `arcroom login`: saves and checks the key only, for the Claude Code plugin, whose hooks are already on everywhere. */
+export async function login(args: string[]): Promise<void> {
+  saveConfig(await connect(args, projectOf(process.cwd())));
+  console.log('ArcRoom is connected on this laptop. Start a new Claude Code session to begin.');
+}
+
+export async function init(args: string[]): Promise<void> {
+  const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+  const agent = (arg('--agent') ?? 'claude') as Agent;
+  if (!AGENTS.includes(agent)) {
+    console.error(`--agent takes one of: ${AGENTS.join(', ')}`);
+    process.exit(1);
+  }
+  const repo = projectOf(process.cwd());
+  // 1. The key, checked with the API and remembered for this machine.
+  const cfg = await connect(args, repo);
+  cfg.setUp = [...new Set([...(cfg.setUp ?? []), repo])]; // laptop-wide hooks (--everywhere) act only in repos set up here
+  saveConfig(cfg);
+
+  // 2. The hook runtime in a stable place.
+  const entry = installRuntime();
 
   // 3. Wire Claude Code's hooks in this project to it, and pre-approve our MCP server (local file: paths are per machine).
-  const entry = join(runtime, 'index.js').replaceAll('\\', '/');
   const file = join(process.cwd(), '.claude', 'settings.local.json');
   const current: Settings = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   // The website's project for this folder (from "Connect a machine"); re-running init keeps the one set before.
