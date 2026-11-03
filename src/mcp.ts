@@ -308,8 +308,6 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
     case 'tools/call': {
       const path = PATHS[params?.name];
       if (!path) throw { code: -32602, message: `unknown tool ${params?.name}` };
-      if (!loadConfig(ctx.cwd).apiKey)
-        return { content: [{ type: 'text', text: 'ArcRoom is not connected on this laptop yet: run npx arcroom login in a terminal (key from arcroomai.com, Settings → API keys).' }], isError: true };
       if (keyRefused(loadConfig(ctx.cwd)))
         return { content: [{ type: 'text', text: 'ArcRoom is stopped on this machine: its key was revoked or its account deleted. Run arcroom init with a new key.' }], isError: true };
       if (isOff(ctx.cwd)) return { content: [{ type: 'text', text: 'ArcRoom is switched off for this repo (arcroom on to use it again).' }], isError: true };
@@ -390,7 +388,12 @@ function keptLater(path: string, body: object, cwd: string) {
 
 export async function mcp(): Promise<void> {
   const cfg = loadConfig(process.cwd()); // one MCP process per session, started in its project
-  const call: Call = sessionCache((path, body) => api(cfg, path, body, path === PATHS.find_task ? FIND_DEADLINE_MS : 10_000));
+  const call: Call = sessionCache((path, body) =>
+    // the Claude Code plugin starts this server before any key is saved
+    cfg.apiKey
+      ? api(cfg, path, body, path === PATHS.find_task ? FIND_DEADLINE_MS : 10_000)
+      : Promise.reject(new Error('ArcRoom is not connected on this laptop yet: run npx arcroom login in a terminal (key from arcroomai.com, Settings → API keys).')),
+  );
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout?.trim() || null;
   const ctx = { claimant: `${hostname()}:${process.pid}`, branch, cwd: process.cwd() }; // one MCP process per Claude session
 
