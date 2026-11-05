@@ -5,7 +5,9 @@
 //         × route (what this prompt is about: "why" wants decisions, "who is editing" wants the code map)
 
 export type Kind = 'recall' | 'playbook' | 'knowledge' | 'code';
-export type Piece = { kind: Kind; text: string; value: number };
+/** title: one line naming the piece for `arcroom handed` (never sent, never handed to the agent) */
+export type Piece = { kind: Kind; text: string; value: number; title?: string };
+export type Cut = { kind: Kind; title?: string; chars: number; reason: string };
 
 export const BUDGET = 2400; // characters, about 600 tokens, for everything handed over before a prompt
 const MIN_PIECE = 240; // a piece clipped shorter than this says too little: left out instead
@@ -36,4 +38,14 @@ export function pack(pieces: Piece[], prompt: string, weights: Record<string, nu
     }
   }
   return out;
+}
+
+/** What pack() left out or cut short, with why: compares what went in with what came out (one piece per kind). */
+export function cutsOf(pieces: Piece[], kept: Piece[]): Cut[] {
+  return pieces.flatMap((p): Cut[] => {
+    const k = kept.find((x) => x.kind === p.kind);
+    if (!k) return [{ kind: p.kind, title: p.title, chars: p.text.length, reason: 'over budget' }];
+    if (k.text.length < p.text.length) return [{ kind: p.kind, title: p.title, chars: p.text.length, reason: `cut to ${k.text.length} chars` }];
+    return [];
+  });
 }

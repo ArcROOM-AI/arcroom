@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { daemon, flush, unsent } from './daemon.js';
+import { whyReport } from './recall.js';
 import { doctor, print } from './doctor.js';
 import { approveChecks, checksHash, isApproved, loadChecks, readApprovals } from './done.js';
-import { codeSetup, repoKey, syncTree, writeSetup } from './tree.js';
+import { codeSetup, readSetup, repoKey, syncTree, writeSetup } from './tree.js';
 import { gitRoot, projectOf } from './git.js';
-import { api, ARCROOM_HOME, loadConfig, setOff } from './home.js';
+import { api, ARCROOM_HOME, isOff, loadConfig, setOff } from './home.js';
+import { chosen, importList, itemsOf, sendItems, sourcesOf } from './import.js';
+import { createInterface } from 'node:readline';
 import { hook } from './hook.js';
 import { init, installRuntime, login, uninstall } from './init.js';
 import { sentReport } from './sent.js';
+import { handedReport } from './handed.js';
 import { mcp } from './mcp.js';
 import { readStats, statusText, wrongNote } from './signs.js';
 import { sessionUsage, tokensOf } from './usage.js';
@@ -99,6 +103,54 @@ else if (cmd === 'doctor') {
 } else if (cmd === 'sent') {
   // arcroom sent [YYYY-MM-DD] [--all]: what this laptop sent that day, kept 7 days
   console.log(sentReport(args));
+} else if (cmd === 'import') {
+  // arcroom import [--dry-run] [--all]: the rules already written for agents, as team facts, after you see them and say yes
+  const root = gitRoot(process.cwd()) ?? process.cwd();
+  const all = args.includes('--all');
+  const items = isOff(root) ? [] : itemsOf(root, all);
+  if (isOff(root)) console.log(`ArcRoom is off for ${root} (arcroom off): nothing is read or imported. arcroom on switches it back.`);
+  else {
+    console.log(importList(items, sourcesOf(root, all)));
+    const cfg = loadConfig(root);
+    if (!items.length) {
+      /* said above */
+    } else if (args.includes('--dry-run')) console.log('\nDry run: nothing was sent.');
+    else if (!cfg.apiKey) console.log('\nNot connected yet: run arcroom login, then import again.');
+    else {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      // stdin closing (Ctrl+D, a pipe with no answer) counts as no
+      const answer = await new Promise<string>((done) => (rl.question(`\nImport these ${items.length}? (y / skip 3,5 / n) `, done), rl.on('close', () => done(''))));
+      rl.close();
+      const pick = chosen(answer, items.length);
+      if (!pick.length) console.log('Nothing was sent.');
+      else {
+        const r = await sendItems(cfg, root, pick.map((i) => items[i]));
+        console.log(
+          `Imported ${r.saved} new team fact${r.saved === 1 ? '' : 's'}${r.already ? `, ${r.already} already there` : ''}${r.failed ? `, ${r.failed} failed (try again)` : ''}. arcroom sent lists what was sent.`,
+        );
+      }
+    }
+  }
+} else if (cmd === 'why') {
+  // arcroom why <file>: the team's decisions and facts about a file, with why and what was dropped
+  if (!args[0]) console.log('usage: arcroom why <file>');
+  else {
+    const root = gitRoot(process.cwd());
+    const path = (root ? relative(root, resolve(args[0])) : args[0]).replaceAll('\\', '/');
+    console.log(whyReport(path, await api(loadConfig(process.cwd()), `/v1/memory/file?path=${encodeURIComponent(path)}`)));
+  }
+} else if (cmd === 'open') {
+  // arcroom open [on|off]: the "open now from teammates" list and clash line at session start, for the repo you are in
+  const s = codeSetup(process.cwd());
+  const sub = args[0];
+  if (!s) console.log('not inside a git repo');
+  else if (sub === 'off' || sub === 'on') {
+    writeSetup(s.root, { open: sub === 'off' ? 'off' : undefined });
+    console.log(`Open-now list ${sub} for ${s.root} (commit .arcroom.json so the team gets the same setting)`);
+  } else console.log(`Open-now list is ${readSetup(s.root).open === 'off' ? 'off' : 'on'} for ${s.root}: arcroom open on|off`);
+} else if (cmd === 'handed') {
+  // arcroom handed [--last N]: what ArcRoom gave the agent, and what it cut for room (kept 7 days, on this laptop)
+  console.log(handedReport(args));
 } else if (cmd === 'uninstall') {
   // arcroom uninstall [--all]: ArcRoom out of this project for every agent; --all also deletes ~/.arcroom
   const changed = uninstall(process.cwd(), args.includes('--all'));
@@ -149,4 +201,4 @@ To allow them: arcroom checks approve ${code}`);
     if (!r.saved && r.note) console.log(`decision not saved: ${r.note}`);
     else console.log(`${r.saved ? 'decision saved' : 'decision already saved; detail updated'}${r.replaced ? ', the earlier one is replaced' : ''} (${r.memo_id})`);
   }
-} else console.log('usage: arcroom init [--project <id>] (asks for the key; or set ARCROOM_API_KEY) [--url <arcroom api url>] | arcroom whoami | arcroom doctor | arcroom rule [--tag t] [--max-hits n] [--idle-days d] | arcroom wrong [memo id] [reason] | arcroom share [memo id] | arcroom decide "<choice>" [--why ...] [--over "A, B"] | arcroom code [status|sync|on|off] | arcroom checks [approve] | arcroom off | arcroom on | arcroom uninstall [--all] | arcroom init --everywhere | arcroom sent [YYYY-MM-DD] [--all] | arcroom flush');
+} else console.log('usage: arcroom init [--project <id>] (asks for the key; or set ARCROOM_API_KEY) [--url <arcroom api url>] | arcroom whoami | arcroom doctor | arcroom rule [--tag t] [--max-hits n] [--idle-days d] | arcroom wrong [memo id] [reason] | arcroom share [memo id] | arcroom decide "<choice>" [--why ...] [--over "A, B"] | arcroom code [status|sync|on|off] | arcroom checks [approve] | arcroom off | arcroom on | arcroom uninstall [--all] | arcroom init --everywhere | arcroom sent [YYYY-MM-DD] [--all] | arcroom handed [--last N] | arcroom why <file> | arcroom import [--dry-run] [--all] | arcroom open [on|off] | arcroom flush');

@@ -56,6 +56,20 @@ test('remember sends the project it was saved in, and a fact can name what it re
   assert.equal(seen[1][1].project, undefined); // only memories carry it
   const remember = ((await handle('tools/list', {}, noCall, ctx)) as any).tools.find((t: any) => t.name === 'remember');
   assert.match(remember.inputSchema.properties.replaces.description, /earlier fact or decision/);
+  assert.match(remember.inputSchema.properties.options.description, /dropped because/);
+});
+
+test('remember: a long "dropped because" is cut to the API limit instead of the save failing; at most 10 options', async () => {
+  const { seen, call } = recorder();
+  const long = `MongoDB: dropped because ${'we need joins and transactions '.repeat(10)}`;
+  const options = ['Postgres', long, ...Array.from({ length: 10 }, (_, i) => `Option ${i}: dropped because ${i}`)];
+  await handle('tools/call', { name: 'remember', arguments: { kind: 'decision', text: 'use Postgres', options } }, call, ctx);
+  const sent = seen[0][1].options as string[];
+  assert.equal(sent.length, 10);
+  assert.equal(sent[0], 'Postgres');
+  assert.equal(sent[1].length, 200);
+  assert.ok(sent[1].startsWith('MongoDB: dropped because') && sent[1].endsWith('…'));
+  assert.ok(sent.every((o) => o.length <= 200));
 });
 
 test('pins default to the current branch; for "me" pins for the user', async () => {
@@ -189,4 +203,24 @@ test('a client with no ArcRoom hooks in its folder is not told that code is reco
   writeFileSync(join(bare, '.codex', 'hooks.json'), '{"command":"node ~/.arcroom/runtime/index.js hook --agent codex"}');
   const hooked = (await handle('initialize', {}, noCall, { ...ctx, cwd: bare })) as any;
   assert.match(hooked.instructions, /^Code changes are recorded automatically/);
+});
+
+test('remember sends each named file as a git blob id (CRLF read as LF); folders and missing files get none', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'arcroom-hash-'));
+  mkdirSync(join(dir, 'db'));
+  writeFileSync(join(dir, 'db', 'schema.sql'), 'create table plans (id int);\n');
+  writeFileSync(join(dir, 'win.txt'), 'line one\r\nline two\r\n');
+  const gitId = (text: string) => spawnSync('git', ['hash-object', '--stdin'], { input: text, encoding: 'utf8', windowsHide: true }).stdout.trim();
+  const { seen, call } = recorder();
+  const files = ['db/schema.sql', join(dir, 'win.txt'), 'db', 'gone.ts'];
+  await handle('tools/call', { name: 'remember', arguments: { kind: 'fact', text: 'we use Postgres 16', files } }, call, { ...ctx, cwd: dir });
+  const body = seen[0][1] as any;
+  assert.deepEqual(body.files, ['db/schema.sql', 'win.txt', 'db', 'gone.ts'], 'files stay plain paths');
+  assert.deepEqual(body.hashes, { 'db/schema.sql': gitId('create table plans (id int);\n'), 'win.txt': gitId('line one\nline two\n') });
+  await handle('tools/call', { name: 'remember', arguments: { kind: 'fact', text: 'no files here' } }, call, { ...ctx, cwd: dir });
+  assert.equal((seen[1][1] as any).hashes, undefined, 'no files: no hashes field');
 });

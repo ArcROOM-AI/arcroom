@@ -32,7 +32,9 @@ then, once, in a terminal: `npx arcroom login` (paste the key). Where `init` alr
 
 Prompts (system reminders removed, secrets redacted, first 1,000 characters), file paths, search patterns, shell commands (first 1,000 characters), URLs and web queries, done-check results, git hashes of the files a turn touched, token counts, and what an agent saves on purpose with ArcRoom's tools. **Never file contents, tool output or edit diffs.** A path to a secret file (`.env`, keys), or a command that names one, leaves only as `[secret file]`.
 
-Every event passes through `~/.arcroom/spool.jsonl` on its way out and is sent within seconds; what was sent is kept for 7 days in `~/.arcroom/sent/`, and `arcroom sent` shows it. `arcroom off` stops ArcRoom for one repo on this laptop, including anything still queued for it; `arcroom on` starts it again.
+Every event passes through `~/.arcroom/spool.jsonl` on its way out and is sent within seconds; what was sent is kept for 7 days in `~/.arcroom/sent/`, and `arcroom sent` shows it. The other way round, `arcroom handed` shows what the next session was given and what was left out, by title and size (kept 7 days in `~/.arcroom/handed/`, never uploaded).
+
+**What teammates see while you work.** When a teammate starts a session in the same repo, their agent gets a short list of the sessions open there and the tasks claimed but not finished: the name you signed up with (else your machine name; never your email), your latest ask (first 120 characters), the last 3 files you edited, whether you are working or waiting, and how long ago. If their first prompt matches your work (the same file, or most of the same words), it gets one line saying you are already on it. Every one of these comes from what `arcroom sent` already shows you. A session quiet for 30 minutes drops off the list; a claimed task shows for 2 days unless it is completed. `arcroom off` sends nothing, so new work in that repo is never listed; `arcroom open off` stops the list and the line for everyone in the repo (commit `.arcroom.json`). In OpenCode the list shows as a chat message; in Cursor the clash line comes with the first tool call. `arcroom off` stops ArcRoom for one repo on this laptop, including anything still queued for it; `arcroom on` starts it again.
 
 ## If the API is down
 
@@ -49,6 +51,10 @@ Hooks never block a session. Memory lookup gives up after 3 seconds, the prompt 
 | `arcroom off` / `arcroom on` | stop or restart ArcRoom for this repo |
 | `arcroom flush` | waits until everything queued was sent: the last step of a CI job (exits 1 if it could not) |
 | `arcroom sent [YYYY-MM-DD] [--all]` | what this laptop sent that day (kept 7 days), exactly as sent with `--all` |
+| `arcroom import [--dry-run] [--all]` | once per repo: the rules you already wrote for agents (`CLAUDE.local.md`, your Claude Code memory notes for this repo, Cursor rules; `--all` adds CLAUDE.md and AGENTS.md) as team facts, after you see the list and say yes. It reads them and never writes them |
+| `arcroom why <file>` | the team's decisions and facts that name this file: what was chosen, why, what was dropped and why, who and when |
+| `arcroom open [on\|off]` | the "open now from teammates" list and the clash line at session start, for this repo (commit `.arcroom.json` to share it) |
+| `arcroom handed [--last N]` | what the agent was handed at the last session start or prompt, and what was left out for room (kept 7 days) |
 | `arcroom init --everywhere` | also cover every other clone and worktree of the repos you set up (Claude Code user settings) |
 | `arcroom uninstall [--all]` | take ArcRoom out of this project for every agent; `--all` also deletes `~/.arcroom` |
 | `arcroom checks` / `arcroom checks approve <code>` | read and approve the done-checks in `.arcroom.json` (in CI, where there is no terminal: set `ARCROOM_APPROVE_CHECKS=<code>` in the job's environment) |

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pack, type Piece, route } from './pack.js';
+import { cutsOf, pack, type Piece, route } from './pack.js';
 
 const piece = (kind: Piece['kind'], value: number, chars: number): Piece => ({ kind, value, text: kind[0].repeat(chars) });
 
@@ -24,4 +24,16 @@ test('pack: learned weights and the route reorder pieces', () => {
   assert.equal(pack(pieces, 'tell me')[0].kind, 'recall');
   assert.equal(pack(pieces, 'tell me', { recall: 0.6 })[0].kind, 'knowledge'); // steps here rarely helped
   assert.equal(pack(pieces, 'why do we do this')[0].kind, 'knowledge');
+});
+
+test('cutsOf: what pack() left out says "over budget", what it clipped says how short', () => {
+  const pieces = [piece('recall', 0.9, 2300), piece('code', 0.5, 900), piece('knowledge', 0.1, 50)];
+  const kept = pack(pieces, 'x', {}, 2400);
+  assert.deepEqual(
+    cutsOf(pieces, kept).map((c) => [c.kind, c.chars, c.reason]),
+    [['code', 900, 'over budget']],
+  );
+  const clipped = pack([piece('recall', 0.9, 2000), piece('code', 0.5, 900)], 'x', {}, 2400);
+  assert.deepEqual(cutsOf([piece('recall', 0.9, 2000), piece('code', 0.5, 900)], clipped)[0].reason, 'cut to 400 chars');
+  assert.deepEqual(cutsOf(pieces.slice(2), pack(pieces.slice(2), 'x')), [], 'everything fit: no cuts');
 });
