@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.8-beta
 
 - After a long chat is compacted, the agent gets its own first ask, latest ask and edited files back, and the team facts and code map come again with the next prompt.
 - `arcroom handed` shows what the agent was given at session start and before each prompt, and what was left out for room (titles and sizes, kept 7 days on this laptop).
