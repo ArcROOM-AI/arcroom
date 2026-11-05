@@ -46,8 +46,9 @@ test('files init wrote that git does not track are kept out of commits in this c
   assert.equal(git(['status', '--porcelain'], { cwd: repo }).stdout?.includes('.cursor'), false);
 });
 
-// CLAUDE.md and AGENTS.md hold the team's rules and stay their only owner: ArcRoom never imports, rewrites or hides them,
-// so no line of them turns into a fact, a how-to or a playbook (init() itself needs the API, so its repo step is run here)
+// CLAUDE.md and AGENTS.md hold the team's rules and stay their only owner: ArcRoom never rewrites or hides them, and no
+// hook turns a line of them into a fact, a how-to or a playbook. Only `arcroom import --all`, run by a person who sees
+// the list and says yes, reads them (never writes). (init() itself needs the API, so its repo step is run here)
 test('init leaves CLAUDE.md and AGENTS.md byte for byte as they were, and in plain sight of git', () => {
   const repo = mkdtempSync(join(tmpdir(), 'arcroom-mdfiles-'));
   git(['init', '-q'], { cwd: repo });
@@ -64,14 +65,17 @@ test('init leaves CLAUDE.md and AGENTS.md byte for byte as they were, and in pla
   assert.match(git(['status', '--porcelain'], { cwd: repo }).stdout ?? '', /^\?\? AGENTS\.md$/m);
 });
 
-test('no plugin code reads or writes CLAUDE.md or AGENTS.md (tests and comments may name them)', () => {
+test('no plugin code writes CLAUDE.md or AGENTS.md, and only arcroom import reads them (tests and comments may name them)', () => {
   const src = fileURLToPath(new URL('../src/', import.meta.url)); // the tests run from dist/
   const code = readdirSync(src)
     .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
     .map((f) => [f, readFileSync(join(src, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')] as const);
   assert.ok(code.length > 20);
   for (const [f, text] of code) {
-    assert.doesNotMatch(text, /\b(CLAUDE|AGENTS)\.md\b/i, f);
-    assert.doesNotMatch(text, /(write|append)\w*\([^)]*\.md\b/i, f);
+    if (f !== 'import.ts') assert.doesNotMatch(text, /\b(CLAUDE|AGENTS)\.md\b/i, f);
+    assert.doesNotMatch(text, /(write|append|rm|unlink|rename|copy)\w*\([^)]*\.md\b/i, f);
   }
+  // import only reads: no write call of any kind in it
+  const imp = code.find(([f]) => f === 'import.ts')![1];
+  assert.doesNotMatch(imp, /\b(writeFileSync|appendFileSync|rmSync|unlinkSync|renameSync|copyFileSync|createWriteStream)\b/);
 });

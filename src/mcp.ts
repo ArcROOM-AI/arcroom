@@ -11,7 +11,7 @@ import { hooksHere, setUpHere } from './scope.js';
 import { keepForLater, unreachable, WRITES } from './pending.js';
 import { codeNoteBody } from './code.js';
 import { defuse, MEMORY_NOTE } from './fence.js';
-import { localFile, lf } from './fresh.js';
+import { hashFiles, localFile, lf } from './fresh.js';
 import { ICONS } from './logo.js';
 import { withRoute } from './route.js';
 
@@ -168,7 +168,13 @@ export const TOOLS = [
         text: { type: 'string', description: 'One sentence, at most 500 characters. For a decision: what was chosen.' },
         why: { type: 'string', description: 'For a decision: the reason.' },
         files: { type: 'array', items: { type: 'string' }, description: 'Paths relative to the project root, e.g. ["package.json"].' },
-        options: { type: 'array', items: { type: 'string' }, description: 'Decision: every option that was weighed, the chosen one included.' },
+        options: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Decision: every option that was weighed, the chosen one included (at most 10). Write each dropped one with ' +
+            'why, 150 characters or less: "MongoDB: dropped because we need joins". The chosen one is just its name.',
+        },
         context: { type: 'string', description: 'Decision: the situation it was made in, e.g. "MVP, one server".' },
         decided_by: { type: 'string', description: 'Decision: who decided (a name or team).' },
         source: {
@@ -330,6 +336,16 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
       if (params.name === 'remember') body.project = projectOf(ctx.cwd);
       if (Array.isArray(depends_on_files)) body.depends_on = fileDeps(depends_on_files, ctx.cwd);
       if (Array.isArray(args.files)) body.files = args.files.map((p: string) => relative(ctx.cwd, resolve(ctx.cwd, p)).replaceAll('\\', '/'));
+      // a fact or decision carries each file's git blob id as it is now (hashes only, as steps do), so a later hand-over
+      // can say "may be stale" once the file changes; a folder or a missing file has none
+      if (params.name === 'remember' && Array.isArray(body.files) && body.files.length) {
+        const hashes = hashFiles(ctx.cwd, body.files as string[]);
+        if (Object.keys(hashes).length) body.hashes = hashes;
+      }
+      // the API refuses the whole save for one option over 200 characters or more than 10: a long "dropped because"
+      // is cut instead of losing the decision
+      if (params.name === 'remember' && Array.isArray(args.options))
+        body.options = args.options.slice(0, 10).map((o: unknown) => (String(o).length > 200 ? `${String(o).slice(0, 199)}…` : String(o)));
       try {
         let result = await call(path, body);
         // Input changed: a reused answer whose files changed since it was stored is evicted here, then looked up again.

@@ -120,6 +120,9 @@ test('a decision says what it was chosen over, who decided, when and where', () 
   const detail = { options: ['Postgres', 'Redis', 'SQLite'], context: 'three API servers', decided_by: 'Sam', decided_at: '2026-10-20T09:00:00Z', sources: [{ kind: 'pr', url: 'https://github.com/x/app/pull/40' }] };
   assert.equal(decisionNote('move sessions to postgres', detail), ' [over Redis, SQLite; when: three API servers; by Sam on 2026-10-20; see https://github.com/x/app/pull/40]');
   assert.equal(decisionNote('anything', undefined), '');
+  // dropped options carry why; the chosen one is found by the name before the colon, even if written with a reason
+  const why = { options: ['Postgres: chosen because three servers write', 'Redis: dropped because no durable writes', 'SQLite: one writer only'] };
+  assert.equal(decisionNote('move sessions to postgres', why), ' [over Redis (dropped because no durable writes), SQLite (one writer only)]');
   const k = knowledgeFor([{ memo_id: 'd2', kind: 'decision', text: 'move sessions to postgres', why: 'we run 3 servers', detail }], new Set())!;
   assert.match(k.text, /- decision \[id d2\]: move sessions to postgres because we run 3 servers \[over Redis, SQLite;/);
 });
@@ -159,4 +162,88 @@ test('each knowledge line shows its memo id, and three fully detailed decisions 
   for (const n of [1, 2, 3]) assert.ok(lines[4 - n].startsWith(`- decision (2026-10-2${n}) [id ${id(n)}]: move session storage to postgres for service ${n} because`));
   assert.match(lines[3], /\[over Redis, SQLite; .*; see https:\/\/github\.com\/acme\/app\/pull\/4012\]$/);
   assert.ok(MAX_KNOWLEDGE + MAX_POINTER <= BUDGET); // with a steps hand-over, pack never has to clip the ids off
+});
+
+test('arcroom why: current decisions and facts on a file, with why and what was dropped; others and empty said plainly', async () => {
+  const { whyReport } = await import('./recall.js');
+  const res = {
+    path: 'src/auth.ts',
+    memos: [
+      {
+        kind: 'decision',
+        last_used: '2026-11-03T10:00:00Z',
+        latest: { data: { text: 'keep sessions in Postgres', why: 'logout must work on every server', options: ['Postgres', 'JWT: dropped because no server logout'], decided_by: 'Sachin', decided_at: '2026-11-02T09:00:00Z', context: 'three API servers' } },
+      },
+      { kind: 'fact', last_used: '2026-10-30T10:00:00Z', latest: { data: { text: 'auth tokens live 30 days' } } },
+      { kind: 'decision', latest: null }, // replaced: no current version
+      { kind: 'task', latest: { data: { text: 'an answer' } } }, // not a decision or fact
+    ],
+  };
+  assert.equal(
+    whyReport('src/auth.ts', res),
+    [
+      'Team decisions and facts that name src/auth.ts (2):',
+      '- decision · 2026-11-02 · by Sachin: keep sessions in Postgres',
+      '    why: logout must work on every server',
+      '    dropped: JWT (dropped because no server logout)',
+      '    when: three API servers',
+      '- fact · 2026-10-30: auth tokens live 30 days',
+      '(Across every repo in the workspace that has a file at this path.)',
+    ].join('\n'),
+  );
+  assert.match(whyReport('README.md', { memos: [] }), /^No team decision or fact names README\.md yet/);
+});
+
+test('may be stale: a saved hash that differs flags the file; older facts ask git; files not here and same hashes do not', async () => {
+  const { changedSince, knowledgeFor } = await import('./recall.js');
+  const here = { exists: (p: string) => p !== 'gone.ts', hash: (p: string) => ({ 'db/schema.sql': 'new', 'src/auth.ts': 'same' })[p] };
+  const asked: string[][] = [];
+  const history = (_since: string, files: string[]) => (asked.push(files), files.filter((f) => f === 'docker-compose.yml'));
+  const k = { files: ['db/schema.sql', 'src/auth.ts', 'gone.ts', 'docker-compose.yml', 'readme.md'], hashes: { 'db/schema.sql': 'old', 'src/auth.ts': 'same', 'gone.ts': 'x' }, saved_at: '2026-10-01T00:00:00Z' };
+  assert.deepEqual(changedSince(k, here, history), ['db/schema.sql', 'docker-compose.yml']);
+  assert.deepEqual(asked, [['docker-compose.yml', 'readme.md']], 'git is asked only about files with no saved hash');
+  assert.deepEqual(changedSince({ files: [] }, here, history), []);
+
+  const item = { memo_id: 'd1', kind: 'decision', text: 'we use Postgres 16', saved_at: '2026-10-01T00:00:00Z', files: ['db/schema.sql'] };
+  const plain = knowledgeFor([item], new Set())!.text;
+  assert.doesNotMatch(plain, /may be stale/, 'no change: the line is as before');
+  const flagged = knowledgeFor([item], new Set(), () => ['db/schema.sql', 'a', 'b', 'c'])!.text;
+  assert.match(flagged, /\n {2}may be stale: files changed since it was saved: db\/schema\.sql, a, b \(\+1 more\)$/);
+});
+
+test('gitChanged: files committed after the date, by path in any case; nothing after a later date', async () => {
+  const { gitChanged } = await import('./recall.js');
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'arcroom-gitlog-'));
+  const g = (args: string[], date?: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir, windowsHide: true, env: { ...process.env, ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {}) } });
+  g(['init', '-q']);
+  writeFileSync(join(dir, 'README.md'), 'one');
+  writeFileSync(join(dir, 'b.txt'), 'one');
+  g(['add', '.']);
+  g(['commit', '-q', '-m', 'first'], '2026-01-01T00:00:00Z');
+  writeFileSync(join(dir, 'README.md'), 'two');
+  g(['commit', '-q', '-am', 'second'], '2026-06-01T00:00:00Z');
+  assert.deepEqual(gitChanged(dir)('2026-03-01T00:00:00Z', ['readme.md', 'b.txt']), ['readme.md'], 'stored lower-case, found anyway');
+  assert.deepEqual(gitChanged(dir)('2026-07-01T00:00:00Z', ['readme.md', 'b.txt']), []);
+  // one call for a whole hand-over: each fact is still judged by its own date; a file with a saved hash is not asked
+  const items = [
+    { files: ['readme.md'], saved_at: '2026-03-01T00:00:00Z' },
+    { files: ['readme.md', 'b.txt'], saved_at: '2026-07-01T00:00:00Z' },
+    { files: ['readme.md'], hashes: { 'readme.md': 'x' }, saved_at: '2025-01-01T00:00:00Z' },
+  ];
+  const history = gitChanged(dir, items);
+  assert.deepEqual(history('2026-03-01T00:00:00Z', ['readme.md']), ['readme.md']);
+  assert.deepEqual(history('2026-07-01T00:00:00Z', ['readme.md', 'b.txt']), []);
+});
+
+test('no lookup for a prompt with no task in it: replies and background notices; real asks in any language still go', async () => {
+  const { hasTask } = await import('./recall.js');
+  for (const p of ['Yes, do T10', 'yes do T9', 'ok go', 'Thanks!', 'yes please continue', '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>'])
+    assert.equal(hasTask(p), false, p);
+  for (const p of ['deploy', 'fix the invoice total', 'Yes, and fix the login bug too', 'ये बग ठीक करो', 'why did we pick Postgres?'])
+    assert.equal(hasTask(p), true, p);
 });

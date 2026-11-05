@@ -17,11 +17,11 @@ export function logSent(events: object[], now = new Date()): void {
   prune(now);
 }
 
-/** Drops days older than KEEP_DAYS. */
-export function prune(now = new Date()): void {
-  if (!existsSync(DIR)) return;
+/** Drops days older than KEEP_DAYS (also used for the hand-over log, handed.ts). */
+export function prune(now = new Date(), dir = DIR): void {
+  if (!existsSync(dir)) return;
   const oldest = dayOf(new Date(now.getTime() - (KEEP_DAYS - 1) * 86_400_000));
-  for (const f of readdirSync(DIR)) if (DAY_FILE.test(f) && f.slice(0, 10) < oldest) rmSync(join(DIR, f));
+  for (const f of readdirSync(dir)) if (DAY_FILE.test(f) && f.slice(0, 10) < oldest) rmSync(join(dir, f));
 }
 
 /** `arcroom sent [YYYY-MM-DD] [--all]`: that day's summary and latest events (--all: every event, as sent). */

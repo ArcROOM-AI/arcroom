@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- After a long chat is compacted, the agent gets its own first ask, latest ask and edited files back, and the team facts and code map come again with the next prompt.
+- `arcroom handed` shows what the agent was given at session start and before each prompt, and what was left out for room (titles and sizes, kept 7 days on this laptop).
+- Open now from teammates: a new session sees the sessions teammates have open in the same repo and the tasks they claimed but did not finish. If the first prompt matches one (the same file, or most of the same words), the agent is told to check with them first. `arcroom open off` turns it off for a repo.
+- Session start sends its blocks in one piece, so the last-run note can no longer be dropped by another block.
+- `arcroom why <file>` shows the team's decisions and facts about a file: what was chosen, why, and what was dropped and why.
+- A decision or fact whose files changed since it was saved is handed over with a "may be stale" line.
+- `arcroom import` turns the rules you already wrote (`CLAUDE.local.md`, your memory notes, Cursor rules; `--all` adds CLAUDE.md and AGENTS.md) into team facts, once, after you see the list and say yes. Hooks still never read these files, and nothing ever writes them.
+
 ## 0.0.7-beta
 
 - Install ArcRoom as a Claude Code plugin: `/plugin marketplace add ArcROOM-AI/arcroom`, then `/plugin install arcroom@arcroom`. It is on in every project with nothing written into them, and steps aside where `arcroom init` already set a project up.
