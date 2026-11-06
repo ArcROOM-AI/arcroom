@@ -56,8 +56,12 @@ test('your own unfinished run on this branch: last ask, the check still failing,
 });
 
 test("a teammate's run says so", () => {
-  const note = lastRunContext({ started_at: '2026-10-25T11:00:00Z', status: 'done', mine: false, report: {} }, now);
+  const note = lastRunContext({ started_at: '2026-10-25T11:00:00Z', status: 'done', mine: false, prompt: 'fix the login page', report: {} }, now);
   assert.match(note, /a teammate's last session/);
+});
+
+test('a session with nothing asked and nothing edited is not handed over', () => {
+  assert.equal(lastRunContext({ started_at: '2026-10-25T11:00:00Z', status: 'running', mine: true, report: {} }, now), '');
 });
 
 test('a session that never closed: unfinished, with the files it edited', () => {

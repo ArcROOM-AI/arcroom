@@ -62,7 +62,7 @@ export function bulletsOf(text: string): { line: number; body: string }[] {
   return out;
 }
 
-const frontmatter = (text: string) => {
+export const frontmatter = (text: string) => {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   return m ? { head: m[1], body: m[2] } : { head: '', body: text };
 };

@@ -9,6 +9,8 @@ import { codeSetup, readSetup, repoKey, syncTree, writeSetup } from './tree.js';
 import { gitRoot, projectOf } from './git.js';
 import { api, ARCROOM_HOME, isOff, loadConfig, setOff } from './home.js';
 import { chosen, importList, itemsOf, sendItems, sourcesOf } from './import.js';
+import { RULES_HIDDEN } from './flags.js';
+import { alreadySent, importRulesList, proposeFiles, ruleFilesOf } from './rules.js';
 import { createInterface } from 'node:readline';
 import { hook } from './hook.js';
 import { init, installRuntime, login, uninstall } from './init.js';
@@ -103,6 +105,36 @@ else if (cmd === 'doctor') {
 } else if (cmd === 'sent') {
   // arcroom sent [YYYY-MM-DD] [--all]: what this laptop sent that day, kept 7 days
   console.log(sentReport(args));
+} else if (cmd === 'import' && !RULES_HIDDEN) {
+  // arcroom import [--dry-run] [--mine]: each rules file becomes one card on the website's Rules page, where a person
+  // accepts it. Never saved as memory, never live from here. --mine adds CLAUDE.local.md and your ~/.claude/CLAUDE.md.
+  const root = gitRoot(process.cwd()) ?? process.cwd();
+  const found = isOff(root) ? [] : ruleFilesOf(root, args.includes('--mine'));
+  // --again sends files even when their words did not change since the last import
+  const same = args.includes('--again') ? [] : alreadySent(projectOf(root), found);
+  const files = found.filter((f) => !same.includes(f));
+  const cfg = loadConfig(root);
+  if (same.length) console.log(`Not sent again, unchanged since your last import: ${same.map((f) => f.path).join(', ')} (arcroom import --again sends them anyway).\n`);
+  if (isOff(root)) console.log(`ArcRoom is off for ${root} (arcroom off): nothing is read or imported. arcroom on switches it back.`);
+  else if (!found.length) console.log("No rules found: no bullets in this repo's committed rules files (--mine adds your own).");
+  else if (!files.length) console.log('Nothing new to send.');
+  else {
+    console.log(importRulesList(files));
+    if (args.includes('--dry-run')) console.log('\nDry run: nothing was sent.');
+    else if (!cfg.apiKey) console.log('\nNot connected yet: run arcroom login, then import again.');
+    else {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      // stdin closing (Ctrl+D, a pipe with no answer) counts as no
+      const answer = await new Promise<string>((done) => (rl.question(`\nSend these ${files.length} file${files.length === 1 ? '' : 's'} to the Rules page? (y / n) `, done), rl.on('close', () => done(''))));
+      rl.close();
+      if (!/^y(es)?$/i.test(answer.trim())) console.log('Nothing was sent.');
+      else {
+        const r = await proposeFiles(cfg, projectOf(root), files);
+        if (r.kept.length) console.log(`Kept in ArcRoom now, so not sent: ${r.kept.join(', ')}. Change those rules on the Rules page; the file's lines can go.`);
+        if (r.sent || r.failed) console.log(`${r.sent} file${r.sent === 1 ? '' : 's'} waiting on the Rules page${r.failed ? `, ${r.failed} failed (try again)` : ''}. Nothing is live until someone accepts them there.`);
+      }
+    }
+  }
 } else if (cmd === 'import') {
   // arcroom import [--dry-run] [--all]: the rules already written for agents, as team facts, after you see them and say yes
   const root = gitRoot(process.cwd()) ?? process.cwd();

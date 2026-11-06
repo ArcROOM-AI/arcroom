@@ -267,12 +267,15 @@ export async function hook(): Promise<void> {
     }
     let note: string | undefined;
     let openNote: string | undefined;
+    let rules: string | undefined;
     if (project) {
       // Session memory: what the last run here did, and what teammates have open here now. Slow or offline API = no note.
       const root = git(['rev-parse', '--show-toplevel'], { cwd: raw.cwd }).stdout?.trim();
-      const notes = await startNotes(session, project, branch, root).catch(() => ({ teammates: 0 }) as Awaited<ReturnType<typeof startNotes>>);
+      const notes = await startNotes(session, project, branch, root, agent, raw.cwd).catch(() => ({ teammates: 0 }) as Awaited<ReturnType<typeof startNotes>>);
       note = notes.lastRun;
       openNote = notes.open;
+      rules = notes.rules;
+      if (rules) injected('rules', rules, true);
       if (note) injected('last_run', note, true);
       if (openNote) injected('open_now', openNote, true);
       // say what leaves the laptop, every session (events.ts keeps it to that)
@@ -286,8 +289,9 @@ export async function hook(): Promise<void> {
     // Every session-start block goes out in ONE text: a second assignment would drop the first.
     // The session's own story is the person's own words (not fenced); the last run and open work may be teammates'
     // words, so they share one fence.
+    // Rules are orders people wrote or accepted on the website (agents can only propose one): first, and not fenced.
     const team = [note, openNote].filter(Boolean).join('\n\n');
-    const start = [story, team ? fence(team) : ''].filter(Boolean).join('\n\n');
+    const start = [rules, story, team ? fence(team) : ''].filter(Boolean).join('\n\n');
     if (start) out.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: start };
     if (name === 'SessionStart')
       logHanded({
@@ -295,6 +299,7 @@ export async function hook(): Promise<void> {
         cwd: raw.cwd,
         when: story ? 'compact' : 'start',
         handed: [
+          ...(rules ? [{ kind: 'rules', title: rules.split('\n')[0], chars: rules.length }] : []),
           ...(story ? [{ kind: 'compact', title: "this session's asks and edited files", chars: story.length }] : []),
           ...(note ? [{ kind: 'last_run', title: note.split('\n')[0], chars: note.length }] : []),
           ...(openNote ? [{ kind: 'open_now', title: `${openNote.split('\n').length - 1} lines of teammates' open work`, chars: openNote.length }] : []),

@@ -65,14 +65,15 @@ test('init leaves CLAUDE.md and AGENTS.md byte for byte as they were, and in pla
   assert.match(git(['status', '--porcelain'], { cwd: repo }).stdout ?? '', /^\?\? AGENTS\.md$/m);
 });
 
-test('no plugin code writes CLAUDE.md or AGENTS.md, and only arcroom import reads them (tests and comments may name them)', () => {
+test('no plugin code writes CLAUDE.md or AGENTS.md, and only import and rules read them (tests and comments may name them)', () => {
   const src = fileURLToPath(new URL('../src/', import.meta.url)); // the tests run from dist/
   const code = readdirSync(src)
     .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
     .map((f) => [f, readFileSync(join(src, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')] as const);
   assert.ok(code.length > 20);
   for (const [f, text] of code) {
-    if (f !== 'import.ts') assert.doesNotMatch(text, /\b(CLAUDE|AGENTS)\.md\b/i, f);
+    // rules.ts (0088) reads them to propose cards and to skip what a tool reads itself; it writes only under ARCROOM_HOME
+    if (f !== 'import.ts' && f !== 'rules.ts') assert.doesNotMatch(text, /\b(CLAUDE|AGENTS)\.md\b/i, f);
     assert.doesNotMatch(text, /(write|append|rm|unlink|rename|copy)\w*\([^)]*\.md\b/i, f);
   }
   // import only reads: no write call of any kind in it

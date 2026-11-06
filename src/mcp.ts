@@ -14,6 +14,7 @@ import { defuse, MEMORY_NOTE } from './fence.js';
 import { hashFiles, localFile, lf } from './fresh.js';
 import { ICONS } from './logo.js';
 import { withRoute } from './route.js';
+import { RULES_HIDDEN } from './flags.js';
 
 const INTENT =
   "The subtask in standard form 'verb object: qualifiers', lowercase, no filler words. " +
@@ -21,6 +22,25 @@ const INTENT =
 const INPUTS =
   'Facts the answer depends on, e.g. {"react": "19.0.0"} or {"file": "src/a.ts", "sha": "1a2b"}. Same task + same inputs = same answer. Use {} if none.';
 const PIN_FOR = { type: 'string', enum: ['branch', 'me'], description: "'branch' = everyone on the current git branch (default), 'me' = only you." };
+
+// Rules (0088): an agent can only propose one; a person approves it on the website before any agent gets it.
+const PROPOSE_RULES = '/v1/team-rules/propose';
+const PROPOSE_RULE = {
+  name: 'propose_rule',
+  description:
+    'Propose a rule: a lasting order the user wants every agent to follow, such as "always run pnpm lint before a PR". ' +
+    'Use it only when the user asks for something to always or never be done. It is not live: it waits on the ArcRoom ' +
+    'Rules page until the person whose key this is approves it, and only then do agents get it. One order per call, said ' +
+    'exactly. Never show the approve link to a customer. For a fact or a decision use remember instead.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'The rule, as one order, at most 2000 characters.' },
+      why: { type: 'string', description: 'Why the user wants it, in a few words (at most 300 characters).' },
+    },
+    required: ['text'],
+  },
+};
 
 export const TOOLS = [
   {
@@ -222,10 +242,12 @@ export const TOOLS = [
       required: ['memo_id', 'version'],
     },
   },
+  ...(RULES_HIDDEN ? [] : [PROPOSE_RULE]),
 ];
 
 // Readable names + the ArcRoom logo, for clients that show tool titles and icons (MCP spec 2025-11-25).
 const TITLES: Record<string, string> = {
+  propose_rule: 'ArcRoom · propose a rule',
   find_task: 'ArcRoom · find in team memory',
   split_task: 'ArcRoom · split a task',
   claim_task: 'ArcRoom · claim a task',
@@ -320,7 +342,7 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
     case 'tools/list':
       return { tools: TOOLS.map((t) => ({ ...t, title: TITLES[t.name], icons: ICONS })) };
     case 'tools/call': {
-      const path = PATHS[params?.name];
+      const path = params?.name === 'propose_rule' && !RULES_HIDDEN ? PROPOSE_RULES : PATHS[params?.name];
       if (!path) throw { code: -32602, message: `unknown tool ${params?.name}` };
       if (keyRefused(loadConfig(ctx.cwd)))
         return { content: [{ type: 'text', text: 'ArcRoom is stopped on this machine: its key was revoked or its account deleted. Run arcroom init with a new key.' }], isError: true };
@@ -329,6 +351,14 @@ export async function handle(method: string, params: any, call: Call, ctx: Conte
         return { content: [{ type: 'text', text: 'ArcRoom is not set up for this repo: run arcroom init in it once.' }], isError: true };
       // depends_on is only ever built here from real file hashes (fileDeps), never taken from the agent
       const { for: pinFor, depends_on_files, depends_on: _given, ...args } = params.arguments ?? {};
+      if (path === PROPOSE_RULES) {
+        try {
+          const r = await call(path, { desk: projectOf(ctx.cwd), texts: [String(args.text ?? '')], ...(args.why ? { why: String(args.why).slice(0, 300) } : {}) });
+          return { content: [{ type: 'text', text: JSON.stringify({ ...r, note: 'Proposed, not live: it waits on the Rules page for a person to approve it.' }) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `ArcRoom error: ${(err as Error).message}` }], isError: true };
+        }
+      }
       if (params.name === 'code_note') {
         const note = codeNoteBody(args, ctx.cwd);
         try {

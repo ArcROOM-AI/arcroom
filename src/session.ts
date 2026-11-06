@@ -1,9 +1,29 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { relative } from 'node:path';
+import type { Agent } from './agents.js';
+import { RULES_HIDDEN } from './flags.js';
 import { projectOf } from './git.js';
 export { projectOf };
 import { api, loadConfig } from './home.js';
 import { sessionFile } from './loop.js';
+import { committedRuleFiles, followFiles, haveVersion, onDiskFor, rulesBlock, rulesKey } from './rules.js';
 import { readSetup } from './tree.js';
+
+const folderOf = (root: string, cwd?: string) => (cwd ? relative(root, cwd).replaceAll('\\', '/') : '');
+
+/** The rules part of the session-start call: none while rules are hidden or outside a repo. */
+export function rulesQuery(project: string, agent: Agent, root?: string, cwd?: string): Record<string, string> {
+  if (!root) return {};
+  const folder = folderOf(root, cwd);
+  const have = haveVersion(rulesKey(project, agent, folder));
+  return {
+    rules: '1',
+    mine: '1',
+    on_disk: onDiskFor(agent, committedRuleFiles(root)).join(','),
+    folder,
+    ...(have !== undefined ? { have: String(have) } : {}),
+  };
+}
 
 // This session's own story, kept on the laptop so a compaction can hand it back: its first and latest ask and the
 // files it edited. Claude Code's summary may drop them; nothing else keeps them per session (.done resets every turn).
@@ -78,6 +98,8 @@ export function lastRunContext(run: any, now = new Date(), root?: string): strin
   const memory = r.memory ?? {};
   const first = String(r.first_prompt ?? run.prompt ?? '');
   const last = String(run.last_prompt ?? '');
+  // a session that was opened and closed with nothing asked and nothing edited has nothing to hand over
+  if (!first.trim() && !last.trim() && !edited.length) return '';
   const whose = run.mine === true ? 'your last session' : run.mine === false ? "a teammate's last session" : 'the last session';
   const ended =
     run.status === 'running'
@@ -181,22 +203,34 @@ export function takeOpen(session: string): OpenNow | undefined {
  * side by side so both fit the 1.5 s session start allows. A slow or offline API leaves that part out, never the start.
  * The open list is also kept for this session (.open), so the first prompt can say "a teammate is already on this".
  */
-export async function startNotes(session: string, project: string, branch?: string, root?: string): Promise<{ lastRun?: string; open?: string; teammates: number }> {
+export async function startNotes(
+  session: string,
+  project: string,
+  branch?: string,
+  root?: string,
+  agent: Agent = 'claude',
+  cwd?: string,
+): Promise<{ lastRun?: string; open?: string; rules?: string; teammates: number }> {
   const cfg = loadConfig(root);
   if (!cfg.apiKey) return { teammates: 0 };
   const qs = new URLSearchParams({ project, exclude: session, ...(branch && branch !== 'HEAD' ? { branch } : {}) });
-  const [run, now] = await Promise.all([
+  // `arcroom open off` (the repo's committed .arcroom.json, so the whole team gets it): no open-now list, no clash line
+  const openOff = !!root && readSetup(root).open === 'off';
+  // rules (0088) ride on the open-now call; the files this tool reads itself are named, so their rules are not sent again
+  const rulesAt = !RULES_HIDDEN && root ? root : undefined;
+  const [run, answer] = await Promise.all([
     api(cfg, `/v1/runs/last?${qs}`, undefined, 1500).catch(() => undefined),
-    // `arcroom open off` (the repo's committed .arcroom.json, so the whole team gets it): no open-now list, no clash line
-    root && readSetup(root).open === 'off'
-      ? undefined
-      : (api(cfg, `/v1/runs/open?${new URLSearchParams({ project })}`, undefined, 1500).catch(() => undefined) as Promise<OpenNow | undefined>),
+    openOff && !rulesAt ? undefined : api(cfg, `/v1/runs/open?${new URLSearchParams({ project, ...rulesQuery(project, agent, rulesAt, cwd) })}`, undefined, 1500).catch(() => undefined),
+    rulesAt ? followFiles(cfg, rulesAt, project, branch).catch(() => 0) : undefined,
   ]);
+  const now: OpenNow | undefined = openOff ? undefined : rulesAt ? answer?.open : answer;
+  const rules = rulesAt ? rulesBlock(rulesKey(project, agent, folderOf(rulesAt, cwd)), answer?.rules) : undefined;
   if (now) writeFileSync(sessionFile(session, '.open'), JSON.stringify(now));
   const open = openNowContext(now, run?.id, branch);
   return {
-    lastRun: run ? lastRunContext(run, new Date(), root) : undefined,
+    lastRun: (run && lastRunContext(run, new Date(), root)) || undefined,
     open,
+    rules,
     teammates: new Set((now?.open ?? []).map((r) => r.run_id)).size,
   };
 }
