@@ -160,7 +160,10 @@ export const TOOLS = [
       'weighed (options), the situation (context), who decided and where (source: the PR, issue or thread). When it ' +
       "replaces an earlier fact or decision, pass that one's memo id (replaces: the [id ...] on its line in ArcRoom team " +
       'knowledge). saved: false = not saved again: already saved, or replaced or reported wrong before (its note says ' +
-      'why; with replaced_by, save again with replaces = that id to bring these words back). Do not retry otherwise.',
+      'why; with replaced_by, save again with replaces = that id to bring these words back). Do not retry otherwise. ' +
+      'Always pick the bag: mine (about the person, their preferences or private matters: only they see it), team (about ' +
+      'the work: everyone in the workspace sees it) or sensitive (team work about a customer, account or patient). One fact ' +
+      'is one claim: when a sentence mixes a personal part and a work part, save them as two facts, each in its own bag.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,8 +186,13 @@ export const TOOLS = [
           properties: { kind: { type: 'string', enum: ['pr', 'issue', 'thread', 'doc', 'commit', 'chat', 'other'] }, url: { type: 'string' }, title: { type: 'string' } },
         },
         replaces: { type: 'string', description: 'Memo id of the earlier fact or decision this one replaces.' },
+        bag: {
+          type: 'string',
+          enum: ['mine', 'team', 'sensitive'],
+          description: 'Who sees it: mine (only this person), team (everyone in the workspace), sensitive (team, about a customer, account or patient).',
+        },
       },
-      required: ['kind', 'text'],
+      required: ['kind', 'text', 'bag'],
     },
   },
   {

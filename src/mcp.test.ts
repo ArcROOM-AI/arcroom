@@ -59,6 +59,16 @@ test('remember sends the project it was saved in, and a fact can name what it re
   assert.match(remember.inputSchema.properties.options.description, /dropped because/);
 });
 
+test('remember: the agent must pick the bag, and it reaches the API as given', async () => {
+  const remember = ((await handle('tools/list', {}, noCall, ctx)) as any).tools.find((t: any) => t.name === 'remember');
+  assert.deepEqual(remember.inputSchema.properties.bag.enum, ['mine', 'team', 'sensitive']);
+  assert.ok(remember.inputSchema.required.includes('bag'));
+  assert.match(remember.description, /two facts, each in its own bag/);
+  const { seen, call } = recorder();
+  await handle('tools/call', { name: 'remember', arguments: { kind: 'fact', text: 'Sachin prefers aisle seats', bag: 'mine' } }, call, ctx);
+  assert.equal(seen[0][1].bag, 'mine');
+});
+
 test('remember: a long "dropped because" is cut to the API limit instead of the save failing; at most 10 options', async () => {
   const { seen, call } = recorder();
   const long = `MongoDB: dropped because ${'we need joins and transactions '.repeat(10)}`;
